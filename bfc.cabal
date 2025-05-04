@@ -1,0 +1,55 @@
+cabal-version: 3.0
+name: bfc
+version: 0.1.0.0
+license: BSD-3-Clause
+license-file: LICENSE
+author: iliayar
+maintainer: iliayar3@gmail.com
+build-type: Simple
+extra-doc-files: CHANGELOG.md
+
+common warnings
+    ghc-options: -Wall
+
+
+library bfc-lib
+    import: warnings
+    hs-source-dirs: lib
+    build-depends: base ^>=4.18.2.1
+                 , vector
+                 , data-default
+                 , mtl
+                 , containers
+    exposed-modules: Basic
+                     Executer
+                     BasicExt
+                     UncheckedInsts
+                     UncheckedInstsExt
+                     UncheckedProc
+                     SafeProc
+                     ProgWriter
+                     Imp
+    default-language: Haskell2010
+
+test-suite tests
+    type: exitcode-stdio-1.0
+    main-is: Test.hs
+    hs-source-dirs: tests
+    build-depends: base ^>=4.18.2.1
+                 , HUnit ^>=1.6
+                 , bfc-lib
+    other-modules: TestUncheckedInsts
+                   TestUncheckedInstsExt
+                   TestUncheckedProc
+                   TestSafeProc
+                   TestImp
+
+executable bfc
+    import: warnings
+    main-is: Main.hs
+    other-modules:
+    build-depends: base ^>=4.18.2.1
+                 , bfc-lib
+
+    hs-source-dirs: app
+    default-language: Haskell2010
