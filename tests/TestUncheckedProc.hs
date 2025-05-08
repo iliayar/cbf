@@ -186,6 +186,40 @@ testFact n res = TestCase $ do
   mem <- evaluate prog
   (mem !! 4) @?= res
 
+sumArray :: [Int] -> [[[UncheckedProc]]]
+sumArray arr =
+  let inits = concat $ zipWith initElem [0..] arr in
+  [ [ inits ++ [
+        ProcConst (Var 0) 0,
+        ProcConst (Var 1) (length arr),
+        ProcGoto (Lbl 1)
+      ],
+      [ ProcBranch (Var 1) (Lbl 2) Exit
+      ],
+      [
+        ProcConst (Var 2) 1,
+        ProcCopySub (Var 2) [Var 1],
+        ProcConst (ArrTargetVar 3) 0,
+        ProcArrayGet (Var 3) (Var 1),
+        ProcCopyAdd (ArrTargetVar 3) [Var 0],
+        ProcGoto (Lbl 1)
+      ]
+    ]
+  ]
+  where
+    initElem :: Int -> Int -> [UncheckedProc]
+    initElem idx val =
+      [ ProcConst (Var 1) idx,
+        ProcConst (ArrTargetVar 3) val,
+        ProcArraySet (Var 3) (Var 1)
+      ]
+
+testSumArray :: [Int] -> Int -> Test
+testSumArray arr res = TestCase $ do
+  let prog = sumArray arr
+  mem <- evaluate prog
+  (mem !! 4) @?= res
+
 tests :: Test
 tests =
   TestList
@@ -204,5 +238,9 @@ tests =
       testFact 1 1,
       testFact 4 24,
       testFact 7 176,
-      testFact 9 128
+      testFact 9 128,
+      testSumArray [1, 2, 3, 4, 5] 15,
+      testSumArray [] 0,
+      testSumArray [10] 10,
+      testSumArray [10, 15, 33] 58
     ]

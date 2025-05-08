@@ -25,10 +25,10 @@ evaluate program =
 kub :: Int -> Program
 kub n =
   Program
-    [ (Function "main" [] 0)
+    [ (Function "main" [] [])
         [ StmtAssgn (Var "res") (ExprCall (Func "kub") [ExprConst n])
         ],
-      (Function "mult" ["a", "b"] 1)
+      (Function "mult" [("a", TyInt), ("b", TyInt)] [TyInt])
         [ StmtAssgn (Var "res") (ExprConst 0),
           StmtWhile (ExprVar (Var "a")) 
             [ StmtAssgn (Var "res") (ExprAdd (ExprVar (Var "res")) (ExprVar (Var "b")))
@@ -36,7 +36,7 @@ kub n =
             ],
           StmtReturn [ExprVar (Var "res")]
         ],
-      (Function "kub" ["a"] 1)
+      (Function "kub" [("a", TyInt)] [TyInt])
         [ StmtReturn [ExprCall (Func "mult") [ExprVar (Var "a"), ExprCall (Func "mult") [ExprVar (Var "a"), ExprVar (Var "a")]]]
         ]
     ]
@@ -44,10 +44,10 @@ kub n =
 fact :: Int -> Program
 fact n =
   Program
-    [ (Function "main" [] 0)
+    [ (Function "main" [] [])
         [ StmtAssgn (Var "res") (ExprCall (Func "fact") [ExprConst n])
         ],
-      (Function "mult" ["a", "b"] 1)
+      (Function "mult" [("a", TyInt), ("b", TyInt)] [TyInt])
         [ StmtAssgn (Var "res") (ExprConst 0),
           StmtWhile (ExprVar (Var "a")) 
             [ StmtAssgn (Var "res") (ExprAdd (ExprVar (Var "res")) (ExprVar (Var "b")))
@@ -55,7 +55,7 @@ fact n =
             ],
           StmtReturn [ExprVar (Var "res")]
         ],
-      (Function "fact" ["a"] 1)
+      (Function "fact" [("a", TyInt)] [TyInt])
         [ StmtIf (ExprVar (Var "a"))
             [ StmtReturn [ExprCall (Func "mult") [ExprVar (Var "a"), ExprCall (Func "fact") [ExprSub (ExprVar (Var "a")) (ExprConst 1)]]]
             ]
@@ -76,6 +76,42 @@ testFact n res = TestCase $ do
   mem <- evaluate prog
   (mem !! 4) @?= res
 
+sumArray :: [Int] -> Program
+sumArray ns =
+  let inits = zipWith (\i v -> StmtAssgnArray (Var "arr") (ExprConst i) (ExprConst v)) [0..] ns in 
+  Program
+    [ (Function "main" [] []) $
+        [ StmtAssgn (Var "res") (ExprConst 0),
+          StmtAllocateArray (Var "arr") $ length ns
+        ] ++ inits ++
+        [ StmtAssgn (Var "arr") (ExprCall (Func "inc_all") [ExprVar $ Var "arr"]),
+          StmtAssgn (Var "res") (ExprCall (Func "sum") [ExprVar $ Var "arr"])
+        ],
+      (Function "inc_all" [("arr", TyArray $ length ns)] [TyArray $ length ns])
+        [ StmtAssgn (Var "i") (ExprConst $ length ns),
+          StmtWhile (ExprVar $ Var "i")
+            [ StmtAssgn (Var "i") (ExprSub (ExprVar $ Var "i") (ExprConst 1)),
+              StmtAssgnArray (Var "arr") (ExprVar $ Var "i") (ExprAdd (ExprArrayGet (Var "arr") (ExprVar $ Var "i")) (ExprConst 1))
+            ],
+          StmtReturn [ExprVar $ Var "arr"]
+        ],
+      (Function "sum" [("arr", TyArray $ length ns)] [TyInt])
+        [ StmtAssgn (Var "i") (ExprConst $ length ns),
+          StmtAssgn (Var "res") (ExprConst 0),
+          StmtWhile (ExprVar $ Var "i")
+            [ StmtAssgn (Var "i") (ExprSub (ExprVar $ Var "i") (ExprConst 1)),
+              StmtAssgn (Var "res") (ExprAdd (ExprVar $ Var "res") (ExprArrayGet (Var "arr") (ExprVar $ Var "i")))
+            ],
+          StmtReturn [ExprVar $ Var "res"]
+        ]
+    ]
+
+testSumArray :: [Int] -> Int -> Test
+testSumArray arr res = TestCase $ do
+  let prog = sumArray arr
+  mem <- evaluate prog
+  (mem !! 4) @?= res + length arr
+
 tests :: Test
 tests =
   TestList
@@ -86,5 +122,9 @@ tests =
       testFact 1 1,
       testFact 4 24,
       testFact 7 176,
-      testFact 9 128
+      testFact 9 128,
+      testSumArray [1, 2, 3, 4, 5] 15,
+      testSumArray [] 0,
+      testSumArray [10] 10,
+      testSumArray [10, 15, 33] 58
     ]

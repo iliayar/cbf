@@ -48,3 +48,20 @@ bfToString = fmap bfToChar
         bfToChar BfDec = '-'
         bfToChar BfLoopBegin = '['
         bfToChar BfLoopEnd = ']'
+
+-- Credits to https://esolangs.org/wiki/Brainfuck_bitwidth_conversions
+doubleCellSize :: [Brainfuck] -> [Brainfuck]
+doubleCellSize [] = []
+doubleCellSize (BfLoopBegin : BfDec : BfLoopEnd : BfRead : insts) =
+    bfFromString ">>>[-]<<<[-], " ++ doubleCellSize insts
+doubleCellSize (inst : insts) = doubleCellSize' inst ++ doubleCellSize insts
+    where
+        doubleCellSize' :: Brainfuck -> [Brainfuck]
+        doubleCellSize' BfMoveRight = bfFromString ">>>>"
+        doubleCellSize' BfMoveLeft = bfFromString "<<<<"
+        doubleCellSize' BfInc = bfFromString ">+<+[>-]>[->>+<]<<"
+        doubleCellSize' BfDec = bfFromString ">+<[>-]>[->>-<]<<-"
+        doubleCellSize' BfLoopBegin = bfFromString ">+<[>-]>[->+>[<-]<[<]>[-<+>]]<-[+<"
+        doubleCellSize' BfLoopEnd = bfFromString ">+<[>-]>[->+>[<-]<[<]>[-<+>]]<-]<"
+        doubleCellSize' BfWrite = [BfWrite]
+        doubleCellSize' BfRead = error "Could not convert raw ',', expected '[-],'"

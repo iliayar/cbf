@@ -5,7 +5,7 @@ module TestSafeProc where
 
 import qualified BasicExt
 import Executer (execute)
-import SafeProc (Block (..), Func (..), Function (..), Lbl (..), Program (..), SafeProc (..), Var (..))
+import SafeProc (Block (..), Func (..), Function (..), Lbl (..), Program (..), SafeProc (..), Var (..), VarType (..))
 import qualified SafeProc
 import Test.HUnit
 import qualified UncheckedInsts
@@ -24,14 +24,14 @@ evaluate program =
 mult :: Int -> Int -> Program
 mult n m =
   Program
-    [ (Function "main" [] 0)
+    [ (Function "main" [] [])
         [ (Block "init")
             [ SProcConst (Var "a") n,
               SProcConst (Var "b") m,
               SProcCall (Func "mult") [Var "a", Var "b"] [Var "c"]
             ]
         ],
-      (Function "mult" ["a", "b"] 1)
+      (Function "mult" [("a", TyVar), ("b", TyVar)] [TyVar])
         [ (Block "init")
             [ SProcConst (Var "ONE") 1,
               SProcConst (Var "res") 0
@@ -52,13 +52,13 @@ mult n m =
 fact :: Int -> Program
 fact n =
   Program
-    [ (Function "main" [] 0)
+    [ (Function "main" [] [])
       [ (Block "init")
         [ SProcConst (Var "a") n
         , SProcCall (Func "fact") [Var "a"] [Var "a"]
         ]
       ]
-    , (Function "mult" ["a", "b"] 1)
+    , (Function "mult" [("a", TyVar), ("b", TyVar)] [TyVar])
         [ (Block "init")
           [ SProcConst (Var "ONE") 1
           , SProcConst (Var "res") 0
@@ -75,7 +75,7 @@ fact n =
         , (Block "return")
           [ SProcReturn [Var "res"] ]
         ]
-    , (Function "fact" ["a"] 1)
+    , (Function "fact" [("a", TyVar)] [TyVar])
       [ (Block "init")
         [ SProcBranch (Var "a") (Lbl "step") (Lbl "base")
         ]
@@ -107,6 +107,71 @@ testFact n res = TestCase $ do
   mem <- evaluate prog
   (mem !! 4) @?= res
 
+
+sumArray :: [Int] -> Program
+sumArray arr =
+  let inits = concat $ zipWith initElem [0..] arr in
+  Program
+    [ (Function "main" [] [])
+        [ (Block "init") $
+            [ SProcConst (Var "b") 0,
+              SProcArrayAlloc (Var "a") $ length arr
+            ] ++ inits ++
+            [ SProcCall (Func "inc_all") [Var "a"] [Var "a"],
+              SProcCall (Func "sum") [Var "a"] [Var "b"] ]
+        ],
+      (Function "sum" [("a", TyArray $ length arr)] [TyVar])
+        [ (Block "init")
+            [ SProcConst (Var "ONE") 1,
+              SProcConst (Var "res") 0,
+              SProcConst (Var "i") $ length arr
+            ],
+          (Block "loop_begin")
+            [ SProcBranch (Var "i") (Lbl "loop_body") (Lbl "return")
+            ],
+          (Block "loop_body")
+            [ SProcCopySub (Var "ONE") [Var "i"],
+              SProcConst (ArrayTargetVar "a") 0,
+              SProcArrayGet (Var "a") (Var "i"),
+              SProcCopyAdd (ArrayTargetVar "a") [Var "res"],
+              SProcGoto (Lbl "loop_begin")
+            ],
+          (Block "return")
+            [SProcReturn [Var "res"]]
+        ],
+      (Function "inc_all" [("a", TyArray $ length arr)] [TyArray $ length arr])
+        [ (Block "init")
+            [ SProcConst (Var "ONE") 1,
+              SProcConst (Var "i") $ length arr
+            ],
+          (Block "loop_begin")
+            [ SProcBranch (Var "i") (Lbl "loop_body") (Lbl "return") ],
+          (Block "loop_body")
+            [ SProcCopySub (Var "ONE") [Var "i"],
+              SProcConst (ArrayTargetVar "a") 0,
+              SProcArrayGet (Var "a") (Var "i"),
+              SProcCopyAdd (Var "ONE") [ArrayTargetVar "a"],
+              SProcArraySet (Var "a") (Var "i"),
+              SProcGoto (Lbl "loop_begin")
+            ],
+          (Block "return")
+            [ SProcReturn [Var "a"] ]
+        ]
+    ]
+    where
+        initElem :: Int -> Int -> [SafeProc]
+        initElem idx value = 
+            [ SProcConst (Var "i") idx,
+              SProcConst (ArrayTargetVar "a") value,
+              SProcArraySet (Var "a") (Var "i")
+            ]
+
+testSumArray :: [Int] -> Int -> Test
+testSumArray arr res = TestCase $ do
+  let prog = sumArray arr
+  mem <- evaluate prog
+  (mem !! 4) @?= res + length arr
+
 tests :: Test
 tests =
   TestList
@@ -118,5 +183,9 @@ tests =
       testFact 1 1,
       testFact 4 24,
       testFact 7 176,
-      testFact 9 128
+      testFact 9 128,
+      testSumArray [1, 2, 3, 4, 5] 15,
+      testSumArray [] 0,
+      testSumArray [10] 10,
+      testSumArray [10, 15, 33] 58
     ]

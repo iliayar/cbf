@@ -55,14 +55,12 @@ import ProgWriter
 --
 -- every block that doesn't ends with branch or goto, will implicitly get it
 
-data Var = Var Int | RetVar
-
-varToIdx :: Var -> Int
-varToIdx (Var i) = i + 1
-varToIdx RetVar = 0
+data Var = ArrTargetVar Int | Var Int | RetVar
 
 convertVar :: Var -> UIE.Var
-convertVar v = UIE.Var $ varToIdx v
+convertVar (Var i) = UIE.Var $ i + 1
+convertVar (ArrTargetVar i) = UIE.ArrTargetVar $ i + 1
+convertVar RetVar = UIE.Var 0
 
 data Lbl = Lbl Int | Exit | Ret
 
@@ -77,6 +75,9 @@ data UncheckedProc
   | ProcRead Var
   | ProcWrite Var
   | ProcCall Func Int
+  | ProcArrayCopy Var Var Int
+  | ProcArrayGet Var Var
+  | ProcArraySet Var Var
 
 isTerminator :: UncheckedInstExt -> Bool
 isTerminator (InsExtGoto _) = True
@@ -283,6 +284,9 @@ convert proc =
       addInstructionsPure
         [InsExtIntrinsic [InstIntrinsic [BfExtMoveLeft n]]]
       addInstructions (return [])
+    convertInst' _ (ProcArrayCopy fv tv sz) = addInstructionsPure [InsExtArrayCopy (convertVar fv) (convertVar tv) sz]
+    convertInst' _ (ProcArrayGet av iv) = addInstructionsPure [InsExtArrayGet (convertVar av) (convertVar iv)]
+    convertInst' _ (ProcArraySet av iv) = addInstructionsPure [InsExtArraySet (convertVar av) (convertVar iv)]
 
 progToString :: [[[UncheckedProc]]] -> String
 progToString prog = runWriter $ progToString' prog
@@ -311,6 +315,7 @@ progToString prog = runWriter $ progToString' prog
 
     varToString :: Var -> String
     varToString (Var i) = "%" ++ show i
+    varToString (ArrTargetVar i) = "%" ++ show i ++ ".target"
     varToString RetVar = "%ret"
 
     funcToString :: Func -> String
@@ -332,3 +337,9 @@ progToString prog = runWriter $ progToString' prog
     instToString (ProcRead v) = write $ "read " ++ varToString v
     instToString (ProcWrite v) = write $ "write " ++ varToString v
     instToString (ProcCall f n) = write $ "call[" ++ show n ++ "] " ++ funcToString f
+    instToString (ProcArrayCopy fv tv sz) =
+        write $ varToString tv ++ "[0.." ++ show sz ++ "] = " ++ varToString fv ++ "[0.." ++ show sz ++ "]"
+    instToString (ProcArrayGet av iv) =
+        write $ "set " ++ varToString av ++ "[" ++ varToString iv ++ "]"
+    instToString (ProcArraySet av iv) =
+        write $  "get " ++ varToString av ++ "[" ++ varToString iv ++ "]"

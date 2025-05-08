@@ -10,6 +10,11 @@ import qualified Data.Char
 import Data.Default
 import qualified Data.Vector as V
 
+cellSize :: Int
+cellSize = 8
+cellSizeMax :: Int
+cellSizeMax = 2 ^ cellSize
+
 newtype Pos = Pos Int
 
 data Line a = Line
@@ -180,10 +185,10 @@ execute insts = do
     executeInst BfMoveRight = modifyLine moveRight
     executeInst BfInc = modifyLine $ \line ->
       let cur' = current line
-       in setCurrent line $ if cur' == 255 then 0 else cur' + 1
+       in setCurrent line $ if cur' == cellSizeMax - 1 then 0 else cur' + 1
     executeInst BfDec = modifyLine $ \line ->
       let cur' = current line
-       in setCurrent line $ if cur' == 0 then 255 else cur' - 1
+       in setCurrent line $ if cur' == 0 then cellSizeMax - 1 else cur' - 1
     executeInst BfLoopBegin = do
         ch <- executerCurrent
         if ch == 0 then gotoLoopEnd 0

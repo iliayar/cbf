@@ -5,8 +5,8 @@ module SafeProc where
 import Control.Monad (forM, forM_, unless, when)
 import qualified Control.Monad.State as ST
 import qualified Data.Map as M
-import qualified Data.Set as S
 import qualified UncheckedInstsExt as UIE
+import qualified UncheckedInsts as UI
 import UncheckedProc (UncheckedProc (..))
 import qualified UncheckedProc as UP
 import ProgWriter
@@ -24,13 +24,22 @@ import Data.Maybe (isJust, isNothing)
 -- New variables are introduced in the place of first usage
 -- Entry function is still the first one
 --
+-- Array variables are NOT introduces in the place of first usage
+-- They are introduced by `allocate var N`
+--
 -- TODO: Check that goto/branch instruction is always the last in the block
 -- and every blocks ends with goto/branch. It can be done in UncheckedProc
 
 frameOffset :: Int
-frameOffset = UIE.varToIdx $ UP.convertVar (UP.Var 0)
+frameOffset = case UIE.convertVar $ UP.convertVar (UP.Var 0) of
+    UI.Var i -> i
 
-newtype Var = Var String
+data Var = Var String | ArrayTargetVar String
+    deriving (Eq, Ord)
+
+instance Show Var where
+    show (Var name) = name
+    show (ArrayTargetVar name) = name ++ ".target"
 
 newtype Lbl = Lbl String
 
@@ -46,10 +55,29 @@ data SafeProc
   | SProcWrite Var
   | SProcCall Func [Var] [Var]
   | SProcReturn [Var]
+  | SProcAssign Var Var
+  | SProcArrayAlloc Var Int
+  | SProcArrayGet Var Var
+  | SProcArraySet Var Var
 
 data Block = Block String [SafeProc]
 
-data Function = Function String [String] Int [Block]
+data Function = Function String [(String, VarType)] [VarType] [Block]
+
+data VarType = TyVar | TyArray Int
+    deriving (Show)
+
+sizeOfType :: VarType -> Int
+sizeOfType TyVar = 1
+sizeOfType (TyArray n) = UI.arraySize n
+
+isVarTy :: VarType -> Bool
+isVarTy TyVar = True
+isVarTy _ = False
+
+isArrayTy :: VarType -> Bool
+isArrayTy (TyArray _) = True
+isArrayTy _ = False
 
 newtype Program = Program [Function]
 
@@ -57,19 +85,19 @@ data ConverterState = ConverterState
   { cFunctionsMapping :: M.Map String Int,
     cFunctionsCnt :: Int,
     cCurrentFunction :: Maybe String,
-    cFunctions :: M.Map String ([String], Int),
+    cFunctions :: M.Map String ([(String, VarType)], [VarType]),
     cResult :: Resolver [[[UncheckedProc]]],
     cCurrentFunctionBlocks :: Resolver [[UncheckedProc]],
     cCurrentBlockInsts :: Resolver [UncheckedProc],
     cBlocksMapping :: M.Map (String, String) Int,
     cBlocksCnt :: Int,
-    cVariables :: M.Map String (S.Set String)
+    cVariables :: M.Map String (M.Map String VarType)
   }
 
 type Converter = ST.State ConverterState
 
 enterFunction :: Function -> Converter ()
-enterFunction (Function name args retCnt _) = do
+enterFunction (Function name args rets _) = do
   st@(ConverterState {cFunctionsMapping, cFunctionsCnt, cCurrentFunction, cFunctions, cVariables}) <- ST.get
   case cCurrentFunction of
     Just prev -> error $ "Unclosed function " ++ prev
@@ -81,11 +109,11 @@ enterFunction (Function name args retCnt _) = do
       { cFunctionsCnt = cFunctionsCnt + 1,
         cFunctionsMapping = M.insert name cFunctionsCnt cFunctionsMapping,
         cCurrentFunction = Just name,
-        cFunctions = M.insert name (args, retCnt) cFunctions,
-        cVariables = M.insert name S.empty cVariables
+        cFunctions = M.insert name (args, rets) cFunctions,
+        cVariables = M.insert name M.empty cVariables
       }
-  forM_ (fmap Var args) recordVar
-  forM_ (fmap (Var . makeRetVar name) [1 .. retCnt]) recordVar
+  forM_ args $ \(var, ty) -> recordVar' (Var var) ty
+  forM_ (zip [1..] rets) $ \(i, ty) -> recordVar' (Var $ makeRetVar name i) ty
 
 finishFunction :: Converter ()
 finishFunction = do
@@ -148,26 +176,34 @@ addInstructions insts = do
 addInstructionsPure :: [UncheckedProc] -> Converter ()
 addInstructionsPure = addInstructions . return
 
-recordVar :: Var -> Converter ()
-recordVar (Var name) = do
+recordVar' :: Var -> VarType -> Converter ()
+recordVar' (Var name) ty = do
   st@(ConverterState {cVariables}) <- ST.get
   currentFunc <- currentFunction
   case M.lookup currentFunc cVariables of
     Nothing -> error $ "No variables map for function " ++ currentFunc
-    Just vars ->
-      ST.put $
-        st
-          { cVariables = M.insert currentFunc (S.insert name vars) cVariables
-          }
+    Just vars -> 
+      case M.lookup name vars of
+        Nothing ->
+          ST.put $
+            st
+              { cVariables = M.insert currentFunc (M.insert name ty vars) cVariables
+              }
+        Just _ -> return ()
+recordVar' (ArrayTargetVar _) _ = return ()
+
+recordVar :: Var -> Converter ()
+recordVar var = recordVar' var TyVar
 
 data ResolverState = ResolverState
   { rBlocksMapping :: M.Map (String, String) Int,
     rFunctionsMapping :: M.Map String Int,
-    rFunctions :: M.Map String ([String], Int),
+    rFunctions :: M.Map String ([(String, VarType)], [VarType]),
     rLocalsSize :: M.Map String Int,
     rCurrentFunction :: Maybe String,
     rVarsCnt :: Int,
-    rVars :: M.Map String Int
+    rVars :: M.Map String Int,
+    rVarTypes :: M.Map String (M.Map String VarType)
   }
 
 type Resolver = ST.State ResolverState
@@ -183,15 +219,15 @@ resolveEnterFunction :: String -> Resolver ()
 resolveEnterFunction name = do
   st@(ResolverState {rCurrentFunction, rFunctions}) <- ST.get
   when (isJust rCurrentFunction) $ error $ "Function already set in Resolver when entering " ++ name
-  let (args, retSize) = rFunctions M.! name
+  let (args, rets) = rFunctions M.! name
   ST.put $
     st
       { rCurrentFunction = Just name,
         rVarsCnt = 0,
         rVars = M.empty
       }
-  forM_ (fmap Var args) resolveVar
-  forM_ (fmap (Var . makeRetVar name) [1 .. retSize]) resolveVar
+  forM_ args $ \(var, _) -> resolveVar (Var var)
+  forM_ (zip [1..] rets) $ \(i, _) -> resolveVar $ Var $ makeRetVar name i
 
 resolveFinishFunction :: Resolver ()
 resolveFinishFunction = do
@@ -202,19 +238,51 @@ resolveFinishFunction = do
       { rCurrentFunction = Nothing
       }
 
+resolveVarType :: Var -> Resolver VarType
+resolveVarType (Var name) = do
+    ResolverState {rVarTypes} <- ST.get
+    currentFunc <- resolveCurrentFunction
+    return $ case M.lookup name $ rVarTypes M.! currentFunc of
+        Nothing -> error $ "Unknown type of variable " ++ name ++ ". Probably array was not allocated"
+        Just ty -> ty
+resolveVarType (ArrayTargetVar name) = do
+    _ <- resolveVarType (Var name)
+    return TyVar
+
+resolveVarSize :: Var -> Resolver Int
+resolveVarSize v = sizeOfType <$> resolveVarType v
+
 resolveVar :: Var -> Resolver UP.Var
-resolveVar (Var name) =
+resolveVar v@(Var name) =
   UP.Var <$> do
     st@(ResolverState {rVars, rVarsCnt}) <- ST.get
     case M.lookup name rVars of
       Nothing -> do
+        size <- resolveVarSize v
         ST.put $
           st
             { rVars = M.insert name rVarsCnt rVars,
-              rVarsCnt = rVarsCnt + 1
+              rVarsCnt = rVarsCnt + size
             }
         return rVarsCnt
       Just idx -> return idx
+resolveVar (ArrayTargetVar name) = do
+    v' <- resolveVar (Var name)
+    case v' of
+        UP.Var idx -> return $ UP.ArrTargetVar idx
+        _ -> error "Array expected to resolve in Var"
+
+resolveVarWithTy :: Var -> Resolver (UP.Var, VarType)
+resolveVarWithTy v = do
+    v' <- resolveVar v
+    ty <- resolveVarType v
+    return (v', ty)
+
+resolveVarWithTyName :: Var -> Resolver (String, UP.Var, VarType)
+resolveVarWithTyName v = do
+    v' <- resolveVar v
+    ty <- resolveVarType v
+    return (show v, v', ty)
 
 makeRetVar :: String -> Int -> String
 makeRetVar funcName n = "$" ++ funcName ++ "/ret" ++ show n
@@ -225,17 +293,17 @@ resolveLbl (Lbl name) = do
   currentFunc <- resolveCurrentFunction
   return $ UP.Lbl $ rBlocksMapping M.! (currentFunc, name)
 
-data ResolvedFunc = ResolvedFunc {rfIdx :: Int, rfArgsSize :: Int, rfRetSize :: Int}
+data ResolvedFunc = ResolvedFunc {rfIdx :: Int, rfArgTys :: [VarType], rfRetTys :: [VarType]}
 
 resolveFunc :: Func -> Resolver ResolvedFunc
 resolveFunc (Func name) = do
   ResolverState {rFunctions, rFunctionsMapping} <- ST.get
-  let (args, retSize) = rFunctions M.! name
+  let (args, rets) = rFunctions M.! name
   return $
     ResolvedFunc
       { rfIdx = rFunctionsMapping M.! name,
-        rfArgsSize = length args,
-        rfRetSize = retSize
+        rfArgTys = fmap snd args,
+        rfRetTys = rets
       }
 
 resolveLocalsSize :: Resolver Int
@@ -243,6 +311,9 @@ resolveLocalsSize = do
   ResolverState {rLocalsSize} <- ST.get
   currentFunc <- resolveCurrentFunction
   return $ rLocalsSize M.! currentFunc
+
+getLocalsSize :: M.Map String VarType -> Int
+getLocalsSize = M.foldl (\a t -> sizeOfType t + a) 0
 
 convert :: Program -> [[[UncheckedProc]]]
 convert proc =
@@ -265,10 +336,11 @@ convert proc =
               { rBlocksMapping = cBlocksMapping converter,
                 rFunctionsMapping = cFunctionsMapping converter,
                 rFunctions = cFunctions converter,
-                rLocalsSize = M.map S.size $ cVariables converter,
+                rLocalsSize = M.map getLocalsSize $ cVariables converter,
                 rCurrentFunction = Nothing,
                 rVarsCnt = 0,
-                rVars = M.empty
+                rVars = M.empty,
+                rVarTypes = cVariables converter
               }
        in let (res, _) = ST.runState (cResult converter) resolver
            in reverse (fmap reverse res)
@@ -304,51 +376,56 @@ convert proc =
     convertInst' (SProcConst var n) = do
       recordVar var
       addInstructions $ do
-        var' <- resolveVar var
+        (var', ty) <- resolveVarWithTy var
+        unless (isVarTy ty) $ error "Const can be used only with VarTy"
         return [ProcConst var' n]
     convertInst' (SProcCopyAdd var vars) = do
       recordVar var
       forM_ vars recordVar
       addInstructions $ do
-        var' <- resolveVar var
-        vars' <- forM vars resolveVar
-        return [ProcCopyAdd var' vars']
+        (var', ty) <- resolveVarWithTy var
+        vars' <- forM vars resolveVarWithTy
+        unless (isVarTy ty && all (isVarTy . snd) vars') $ error "CopyAdd can be used only with VarTy"
+        return [ProcCopyAdd var' (fmap fst vars')]
     convertInst' (SProcCopySub var vars) = do
       recordVar var
       forM_ vars recordVar
       addInstructions $ do
-        var' <- resolveVar var
-        vars' <- forM vars resolveVar
-        return [ProcCopySub var' vars']
+        (var', ty) <- resolveVarWithTy var
+        vars' <- forM vars resolveVarWithTy
+        unless (isVarTy ty && all (isVarTy . snd) vars') $ error "CopySub can be used only with VarTy"
+        return [ProcCopySub var' (fmap fst vars')]
     convertInst' (SProcRead var) = do
       recordVar var
       addInstructions $ do
-        var' <- resolveVar var
+        (var', ty) <- resolveVarWithTy var
+        unless (isVarTy ty) $ error "Read can be used only with VarTy"
         return [ProcRead var']
     convertInst' (SProcWrite var) = do
       recordVar var
       addInstructions $ do
-        var' <- resolveVar var
+        (var', ty) <- resolveVarWithTy var
+        unless (isVarTy ty) $ error "Read can be used only with VarTy"
         return [ProcWrite var']
     convertInst' (SProcCall func@(Func name) argVars retVars) = do
       forM_ argVars recordVar
       forM_ retVars recordVar
       addInstructions $ do
-        ResolvedFunc {rfIdx, rfArgsSize, rfRetSize} <- resolveFunc func
-        unless (rfArgsSize == length argVars) $
+        ResolvedFunc {rfIdx, rfArgTys, rfRetTys} <- resolveFunc func
+        unless (length rfArgTys == length argVars) $
           error $
             "Invalid call to function "
               ++ name
               ++ ". Expected "
-              ++ show rfArgsSize
+              ++ show (length rfArgTys)
               ++ " args, provided "
               ++ show (length argVars)
-        unless (rfRetSize == length retVars) $
+        unless (length rfRetTys == length retVars) $
           error $
             "Invalid call to function "
               ++ name
               ++ ". Expected "
-              ++ show rfArgsSize
+              ++ show (length rfRetTys)
               ++ " return values, provided "
               ++ show (length retVars)
         localsSize <- resolveLocalsSize
@@ -358,37 +435,78 @@ convert proc =
         let shiftSize = frameOffset + localsSize
             -- NOTE: UP.Var when converting will shift index by frameOffset, so subtracting it
             argVarsBase = (shiftSize + frameOffset) - frameOffset
-            retVarsBase = argVarsBase + rfArgsSize
-        argVars' <- forM argVars resolveVar
-        retVars' <- forM retVars resolveVar
-        let calleeArgs = [UP.Var $ idx + argVarsBase | idx <- [0 .. rfArgsSize - 1]]
-            calleeRets = [UP.Var $ idx + retVarsBase | idx <- [0 .. rfRetSize - 1]]
-        return $
-          [ProcConst arg 0 | arg <- calleeArgs]
-            ++ [ProcCopyAdd var [arg] | (var, arg) <- zip argVars' calleeArgs]
-            ++ [ProcCall (UP.Func rfIdx) shiftSize]
-            ++ [ProcConst var 0 | var <- retVars']
-            ++ [ProcCopyAdd ret [var] | (ret, var) <- zip calleeRets retVars']
+            retVarsBase = argVarsBase + foldl (\sz ty -> sz + sizeOfType ty) 0 rfArgTys
+        argVars' <- forM argVars resolveVarWithTyName
+        retVars' <- forM retVars resolveVarWithTyName
+        let calleeArgs = 
+                fst $ foldr (\ty (res, base) -> (("CALL_ARG", UP.Var base, ty) : res, base + sizeOfType ty))
+                    ([], argVarsBase) rfArgTys
+            calleeRets = 
+                fst $ foldr (\ty (res, base) -> (("CALL_RET", UP.Var base, ty) : res, base + sizeOfType ty))
+                    ([], retVarsBase) rfRetTys
+        argAssgns <- concat <$> forM (zip calleeArgs argVars') (uncurry makeAssignment')
+        retAssgns <- concat <$> forM (zip retVars' calleeRets) (uncurry makeAssignment')
+        return $ argAssgns ++ [ProcCall (UP.Func rfIdx) shiftSize] ++ retAssgns
     convertInst' (SProcReturn retVars) = do
         forM_ retVars recordVar
         addInstructions $ do
             currentFunc <- resolveCurrentFunction
-            ResolvedFunc { rfRetSize } <- resolveFunc (Func currentFunc)
-            unless (rfRetSize == length retVars) $
+            ResolvedFunc { rfRetTys } <- resolveFunc (Func currentFunc)
+            unless (length rfRetTys == length retVars) $
               error $
                 "Invalid return in "
                   ++ currentFunc
                   ++ ". Expected "
-                  ++ show rfRetSize
+                  ++ show (length rfRetTys)
                   ++ " return values, provided "
                   ++ show (length retVars)
-            let rets = [ Var $ makeRetVar currentFunc idx | idx <- [1 .. rfRetSize] ]
-            rets' <- forM rets resolveVar
-            retVars' <- forM retVars resolveVar
-            return $
-                [ ProcConst ret 0 | ret <- rets' ]
-                ++ [ ProcCopyAdd var [ret] | (var, ret) <- zip retVars' rets' ]
-                ++ [ ProcGoto UP.Ret ]
+            let rets = [ Var $ makeRetVar currentFunc idx | idx <- [1 .. length rfRetTys] ]
+            retAssgns <- concat <$> forM (zip rets retVars) (uncurry makeAssignment)
+            return $ retAssgns ++ [ ProcGoto UP.Ret ]
+    convertInst' (SProcAssign dv sv) = do
+        -- FIXME: Actually its wrong to record these vars as VarTy
+        -- Or maybe OK
+        recordVar dv
+        recordVar sv
+        addInstructions $ makeAssignment dv sv
+    convertInst' (SProcArrayAlloc var size) = recordVar' var (TyArray size) 
+    convertInst' (SProcArrayGet av iv) = do
+        recordVar iv
+        addInstructions $ do
+            (iv', iTy) <- resolveVarWithTy iv
+            (av', aTy) <- resolveVarWithTy av
+            unless (isVarTy iTy) $ error "Index in ArrayGet must be of type VarTy"
+            unless (isArrayTy aTy) $ error "Array in ArrayGet must be of type VarTy"
+            return [ ProcArrayGet av' iv' ]
+    convertInst' (SProcArraySet av iv) = do
+        recordVar iv
+        addInstructions $ do
+            (iv', iTy) <- resolveVarWithTy iv
+            (av', aTy) <- resolveVarWithTy av
+            unless (isVarTy iTy) $ error "Index in ArrayGet must be of type VarTy"
+            unless (isArrayTy aTy) $ error "Array in ArrayGet must be of type VarTy"
+            return [ ProcArraySet av' iv' ]
+
+    makeAssignment' :: (String, UP.Var, VarType) -> (String, UP.Var, VarType) -> Resolver [UncheckedProc]
+    makeAssignment' (dname, dv', dvTy) (sname, sv', svTy) = do
+        case (dvTy, svTy) of
+            (TyVar, TyVar) -> return
+              [ ProcConst dv' 0,
+                ProcCopyAdd sv' [dv']
+              ]
+            (TyArray dvSize, TyArray svSize) -> do
+                unless (dvSize == svSize) $ 
+                    error $ "Cannot assign array " ++ sname ++ " to " ++ dname
+                      ++ ". Size " ++ show svSize ++ " not match size " ++ show dvSize
+                return [ ProcArrayCopy sv' dv' dvSize ]
+            _ -> error $ "Cannot assign variable " ++ sname ++ " of type " ++ show svTy
+                    ++ " to variable " ++ dname ++ " of type " ++ show dvTy
+
+    makeAssignment :: Var -> Var -> Resolver [UncheckedProc]
+    makeAssignment dv sv = do
+        (dv', dvTy) <- resolveVarWithTy dv
+        (sv', svTy) <- resolveVarWithTy sv
+        makeAssignment' (show dv, dv', dvTy) (show sv, sv', svTy)
 
 progToString :: Program -> String
 progToString prog = runWriter $ progToString' prog
@@ -397,9 +515,12 @@ progToString prog = runWriter $ progToString' prog
     progToString' (Program functions) =
         forM_ (intersperse nl $ fmap functionToString functions) id
 
+    argToString :: (String, VarType) -> String
+    argToString (name, ty) = name ++ ": " ++ show ty
+
     functionToString :: Function -> ProgWriter ()
-    functionToString (Function name args retSize blocks) = do
-        write $ "function " ++ name ++ "(" ++ intercalate ", " args ++ ") [" ++ show retSize ++ "] {"
+    functionToString (Function name args rets blocks) = do
+        write $ "function " ++ name ++ "(" ++ intercalate ", " (fmap argToString args) ++ ") [" ++ concatMap show rets ++ "] {"
         withIndent $ do
             nl
             forM_ (intersperse nl $ fmap blockToString blocks) id
@@ -416,7 +537,7 @@ progToString prog = runWriter $ progToString' prog
     lblToString (Lbl name) = name
 
     varToString :: Var -> String
-    varToString (Var name) = name
+    varToString = show
 
     funcToString :: Func -> String
     funcToString (Func name) = name
@@ -441,3 +562,11 @@ progToString prog = runWriter $ progToString' prog
             ++ " [" ++ intercalate ", " (fmap varToString rets) ++ "]"
     instToString (SProcReturn vars) =
         write $ "return [" ++ intercalate ", " (fmap varToString vars) ++ "]"
+    instToString (SProcArrayAlloc var size) =
+        write $ "alloc " ++ varToString var ++ "[" ++ show size ++ "]"
+    instToString (SProcAssign dv sv) =
+        write $ varToString dv ++ " = " ++ varToString sv
+    instToString (SProcArrayGet av iv) =
+        write $ "get " ++ varToString av ++ "[" ++ varToString iv ++ "]"
+    instToString (SProcArraySet av iv) =
+        write $ "set " ++ varToString av ++ "[" ++ varToString iv ++ "]"

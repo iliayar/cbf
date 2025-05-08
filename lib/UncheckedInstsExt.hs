@@ -1,10 +1,12 @@
 module UncheckedInstsExt where
 
-import Data.List (intercalate)
+import Data.List (intercalate, intersperse)
 import UncheckedInsts (UncheckedInst (..))
 import qualified UncheckedInsts as UI
 import qualified Data.Map as M
 import qualified Data.Set as S
+import ProgWriter
+import Control.Monad (forM_, unless)
 
 -- More high level version of Inst with labels and gotos
 -- The structure of program:
@@ -65,16 +67,14 @@ import qualified Data.Set as S
 
 -- | 0  | 1    | 2    | ...
 -- | pc | tmpa | tmpb | ...
-data Var = Var Int | Pc | TmpA | TmpB
+data Var = ArrTargetVar Int | Var Int | Pc | TmpA | TmpB
 
-varToIdx :: Var -> Int
-varToIdx (Var i) = i + 3
-varToIdx Pc = 0
-varToIdx TmpA = 1
-varToIdx TmpB = 2
-
-transVar :: Var -> UI.Var
-transVar v = UI.Var $ varToIdx v
+convertVar :: Var -> UI.Var
+convertVar (ArrTargetVar i) = UI.arrayTargetVar $ convertVar $ Var i
+convertVar (Var i) = UI.Var $ i + 3
+convertVar Pc = UI.Var 0
+convertVar TmpA = UI.Var 1
+convertVar TmpB = UI.Var 2
 
 data Lbl = Lbl Int | Exit
 
@@ -91,33 +91,53 @@ data UncheckedInstExt
   | InsExtRead Var
   | InsExtWrite Var
   | InsExtIntrinsic [UncheckedInst]
+  | InsExtArrayCopy Var Var Int
+  | InsExtArrayGet Var Var
+  | InsExtArraySet Var Var
 
 convert :: [[UncheckedInstExt]] -> [UncheckedInst]
 convert = convertBlocks
   where
     convert' :: UncheckedInstExt -> [UncheckedInst]
     convert' (InsExtGoto l) =
-      [ InstConst (transVar TmpA) (transLbl l),
-        InstMoveAdd (transVar TmpA) [transVar Pc]
+      [ InstConst (convertVar TmpA) (transLbl l),
+        InstMoveAdd (convertVar TmpA) [convertVar Pc]
       ]
-    convert' (InsExtConst var n) = [InstConst (transVar var) n]
+    convert' (InsExtConst var n) = [InstConst (convertVar var) n]
     convert' (InsExtCopyAdd v vs) =
-      [ InstConst (transVar TmpA) 0,
-        InstMoveAdd (transVar v) (transVar TmpA : fmap transVar vs),
-        InstMoveAdd (transVar TmpA) [transVar v]
+      [ InstConst (convertVar TmpA) 0,
+        InstMoveAdd (convertVar v) (convertVar TmpA : fmap convertVar vs),
+        InstMoveAdd (convertVar TmpA) [convertVar v]
       ]
     convert' (InsExtCopySub v vs) =
-      [ InstConst (transVar TmpA) 0,
-        InstConst (transVar TmpB) 0,
-        InstMoveAdd (transVar v) [transVar TmpA, transVar TmpB],
-        InstMoveAdd (transVar TmpA) [transVar v],
-        InstMoveSub (transVar v) (fmap transVar vs),
-        InstMoveAdd (transVar TmpB) [transVar v]
+      [ InstConst (convertVar TmpA) 0,
+        InstConst (convertVar TmpB) 0,
+        InstMoveAdd (convertVar v) [convertVar TmpA, convertVar TmpB],
+        InstMoveAdd (convertVar TmpA) [convertVar v],
+        InstMoveSub (convertVar v) (fmap convertVar vs),
+        InstMoveAdd (convertVar TmpB) [convertVar v]
       ]
     convert' (InsExtBranch v thenLbl elseLbl) = mkIf v (convert' $ InsExtGoto thenLbl) (convert' $ InsExtGoto elseLbl)
-    convert' (InsExtRead v) = [InstRead (transVar v)]
-    convert' (InsExtWrite v) = [InstWrite (transVar v)]
+    convert' (InsExtRead v) = [InstRead (convertVar v)]
+    convert' (InsExtWrite v) = [InstWrite (convertVar v)]
     convert' (InsExtIntrinsic prog) = prog
+    convert' (InsExtArrayCopy fv tv sz) =
+      [ InstConst (UI.arrayTargetIdxVar $ convertVar fv) sz,
+        InstConst (UI.arrayTargetVar $ convertVar fv) 0,
+        InstArrCopy (convertVar fv) (convertVar tv)
+      ]
+    convert' (InsExtArrayGet av iv) =
+      [ InstConst (convertVar TmpA) 0,
+        InstMoveAdd (convertVar iv) [convertVar TmpA, UI.arrayTargetIdxVar $ convertVar av],
+        InstMoveAdd (convertVar TmpA) [convertVar iv],
+        InstArrGet (convertVar av)
+      ]
+    convert' (InsExtArraySet av iv) =
+      [ InstConst (convertVar TmpA) 0,
+        InstMoveAdd (convertVar iv) [convertVar TmpA, UI.arrayTargetIdxVar $ convertVar av],
+        InstMoveAdd (convertVar TmpA) [convertVar iv],
+        InstArrSet (convertVar av)
+      ]
 
     convertBlock :: [UncheckedInstExt] -> [UncheckedInst]
     convertBlock [] = []
@@ -126,17 +146,17 @@ convert = convertBlocks
     convertBlocks :: [[UncheckedInstExt]] -> [UncheckedInst]
     convertBlocks [] = error "Program must contain at least one block"
     convertBlocks bs =
-      [ InstConst (transVar Pc) 1, -- entry is first block
+      [ InstConst (convertVar Pc) 1, -- entry is first block
         InstWhile
-          (transVar Pc) -- goto 0 is exit
+          (convertVar Pc) -- goto 0 is exit
           (convertBlocks' bs)
       ]
 
     convertBlocks' :: [[UncheckedInstExt]] -> [UncheckedInst]
-    convertBlocks' [] = [InstConst (transVar Pc) 0] -- exit on unknown label
+    convertBlocks' [] = [InstConst (convertVar Pc) 0] -- exit on unknown label
     convertBlocks' (b : bs) =
-      [ InstConst (transVar TmpA) 1,
-        InstMoveSub (transVar TmpA) [transVar Pc]
+      [ InstConst (convertVar TmpA) 1,
+        InstMoveSub (convertVar TmpA) [convertVar Pc]
       ]
         ++ mkIf
           Pc
@@ -145,22 +165,22 @@ convert = convertBlocks
 
     mkIf :: Var -> [UncheckedInst] -> [UncheckedInst] -> [UncheckedInst]
     mkIf var thenBr elseBr =
-      [ InstConst (transVar TmpA) 0,
-        InstConst (transVar TmpB) 0,
-        InstMoveAdd (transVar var) [transVar TmpA, transVar TmpB],
-        InstMoveAdd (transVar TmpB) [transVar var],
-        InstConst (transVar TmpB) 1,
+      [ InstConst (convertVar TmpA) 0,
+        InstConst (convertVar TmpB) 0,
+        InstMoveAdd (convertVar var) [convertVar TmpA, convertVar TmpB],
+        InstMoveAdd (convertVar TmpB) [convertVar var],
+        InstConst (convertVar TmpB) 1,
         InstWhile
-          (transVar TmpA)
+          (convertVar TmpA)
           ( thenBr
-              ++ [ InstConst (transVar TmpA) 0,
-                   InstConst (transVar TmpB) 0
+              ++ [ InstConst (convertVar TmpA) 0,
+                   InstConst (convertVar TmpB) 0
                  ]
           ),
         InstWhile
-          (transVar TmpB)
+          (convertVar TmpB)
           ( elseBr
-              ++ [ InstConst (transVar TmpB) 0
+              ++ [ InstConst (convertVar TmpB) 0
                  ]
           )
       ]
@@ -203,48 +223,50 @@ convert = convertBlocks
 --         collectTransitive _ [] = M.empty
 
 progToString :: [[UncheckedInstExt]] -> String
-progToString prog = intercalate "\n" $ zipWith blockToString [0 ..] prog
+progToString prog = runWriter $ progToString' prog
   where
-    getIndent :: Int -> String
-    getIndent indent = replicate (indent * 2) ' '
+    progToString' :: [[UncheckedInstExt]] -> ProgWriter ()
+    progToString' prog' = forM_ (intersperse nl $ zipWith blockToString [0..] prog') id
 
-    blockToString :: Int -> [UncheckedInstExt] -> String
-    blockToString blockIdx block = "#" ++ show blockIdx ++ ":\n" ++ instsToString 1 block
+    blockToString :: Int -> [UncheckedInstExt] -> ProgWriter ()
+    blockToString blockIdx block = do
+        write $ "#" ++ show blockIdx ++ ":"
+        withIndent $ nl >> instsToString block
 
-    instsToString :: Int -> [UncheckedInstExt] -> String
-    instsToString indent block = intercalate "\n" $ fmap (instToString indent) block
+    instsToString :: [UncheckedInstExt] -> ProgWriter ()
+    instsToString block = forM_ (intersperse nl $ fmap instToString block) id
 
     lblToString :: Lbl -> String
     lblToString (Lbl i) = "#" ++ show i
     lblToString Exit = "#exit"
 
-    instToString :: Int -> UncheckedInstExt -> String
-    instToString indent (InsExtConst var n) = getIndent indent ++ varToString var ++ " := " ++ show n
-    instToString indent (InsExtGoto l) = getIndent indent ++ "goto " ++ lblToString l
-    instToString indent (InsExtCopyAdd v vs) =
-      getIndent indent
-        ++ intercalate "; " (fmap (\v' -> varToString v' ++ " += " ++ varToString v) vs)
-    instToString indent (InsExtCopySub v vs) =
-      getIndent indent
-        ++ intercalate "; " (fmap (\v' -> varToString v' ++ " -= " ++ varToString v) vs)
-    instToString indent (InsExtBranch v thenLbl elseLbl) =
-      getIndent indent
-        ++ "if "
-        ++ varToString v
-        ++ " != 0 {\n"
-        ++ instsToString (indent + 1) [InsExtGoto thenLbl]
-        ++ "\n"
-        ++ getIndent indent
-        ++ "} else {\n"
-        ++ instsToString (indent + 1) [InsExtGoto elseLbl]
-        ++ "\n"
-        ++ getIndent indent
-        ++ "}"
-    instToString indent (InsExtRead v) = getIndent indent ++ "read " ++ varToString v
-    instToString indent (InsExtWrite v) = getIndent indent ++ "write " ++ varToString v
-    instToString indent (InsExtIntrinsic prog') = getIndent indent ++ "Intrinsic:\n" ++ UI.progToStringWithIndent (indent + 1) prog'
+    instToString ::  UncheckedInstExt -> ProgWriter ()
+    instToString (InsExtConst var n) = write $ varToString var ++ " := " ++ show n
+    instToString (InsExtGoto l) = write $ "goto " ++ lblToString l
+    instToString (InsExtCopyAdd v vs) =
+        write $ intercalate "; " (fmap (\v' -> varToString v' ++ " += " ++ varToString v) vs)
+    instToString (InsExtCopySub v vs) =
+        write $ intercalate "; " (fmap (\v' -> varToString v' ++ " -= " ++ varToString v) vs)
+    instToString (InsExtBranch v thenLbl elseLbl) = do
+        write $ "if " ++ varToString v ++ " != 0 {"
+        withIndent $ nl >> instsToString [InsExtGoto thenLbl]
+        nl >> write "} else {"
+        withIndent $ nl >> instsToString  [InsExtGoto elseLbl]
+        nl >> write "}"
+    instToString (InsExtRead v) = write $ "read " ++ varToString v
+    instToString (InsExtWrite v) = write $ "write " ++ varToString v
+    instToString (InsExtIntrinsic prog') = do
+        write "Intrinsic:"
+        withIndent $ nl >> UI.progToString' prog'
+    instToString (InsExtArrayCopy fv tv sz) =
+        write $ varToString tv ++ "[0.." ++ show sz ++ "] = " ++ varToString fv ++ "[0.." ++ show sz ++ "]"
+    instToString (InsExtArrayGet av iv) =
+        write $ "set " ++ varToString av ++ "[" ++ varToString iv ++ "]"
+    instToString (InsExtArraySet av iv) =
+        write $  "get " ++ varToString av ++ "[" ++ varToString iv ++ "]"
 
     varToString (Var i) = "%" ++ show i
+    varToString (ArrTargetVar i) = "%" ++ show i ++ ".target"
     varToString Pc = "%pc"
     varToString TmpA = "%tmpa"
     varToString TmpB = "%tmpb"

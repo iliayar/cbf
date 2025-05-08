@@ -42,6 +42,9 @@ withIndent inner = do
   return r
 
 runWriter :: ProgWriter a -> String
-runWriter writer =
-  let (_, st) = ST.runState writer $ ProgWriterState {stIndent = 0, stResult = ""}
+runWriter = runWriterWithIndent 0
+
+runWriterWithIndent :: Int -> ProgWriter a -> String
+runWriterWithIndent indent' writer =
+  let (_, st) = ST.runState writer $ ProgWriterState {stIndent = indent', stResult = ""}
   in stResult st
