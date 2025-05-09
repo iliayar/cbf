@@ -40,11 +40,12 @@ newtype Var = Var String
 instance Show Var where
     show (Var name) = name
 
-data Ref = RefVar Var | RefArrayValue Ref
+data Ref = RefVar Var | RefArrayValue Ref | RefStructField Ref String
 
 instance Show Ref where
     show (RefVar var) = show var
-    show (RefArrayValue ref) = show ref ++ ".target"
+    show (RefArrayValue ref) = show ref ++ ".value"
+    show (RefStructField ref f) = show ref ++ "." ++ f
 
 newtype Lbl = Lbl String
 
@@ -78,6 +79,10 @@ getArrayElemTy _ = undefined
 
 getArrayElemSize :: Ty -> Int
 getArrayElemSize ty = sizeOfType $ getArrayElemTy ty
+
+getStructFields :: Ty -> [(String, Ty)]
+getStructFields (TyStruct fs) = fs
+getStructFields _ = undefined
 
 sizeOfType :: Ty -> Int
 sizeOfType TyInt = 1
@@ -195,7 +200,7 @@ recordVar' (RefVar (Var name)) ty = do
   currentFunc <- currentFunction
   case M.lookup currentFunc cVariables of
     Nothing -> error $ "No variables map for function " ++ currentFunc
-    Just vars -> 
+    Just vars ->
       case M.lookup name vars of
         Nothing ->
           ST.put $
@@ -204,6 +209,7 @@ recordVar' (RefVar (Var name)) ty = do
               }
         Just _ -> return ()
 recordVar' (RefArrayValue _) _ = return ()
+recordVar' (RefStructField _ _) _ = return ()
 
 recordVar :: Ref -> Converter ()
 recordVar ref = recordVar' ref TyInt
@@ -259,14 +265,27 @@ resolveTy (Var name) = do
         Nothing -> error $ "Unknown type of variable " ++ name ++ ". Probably array was not allocated"
         Just ty -> ty
 
+findFieldOffsetAndTy :: [(String, Ty)] -> String -> (Int, Ty)
+findFieldOffsetAndTy = findFieldOffsetAndTy' 0
+    where
+        findFieldOffsetAndTy' :: Int -> [(String, Ty)] -> String -> (Int, Ty)
+        findFieldOffsetAndTy' o ((f, ty) : fs) f' =
+          if f == f' then (o, ty)
+          else findFieldOffsetAndTy' (o + sizeOfType ty) fs f'
+        findFieldOffsetAndTy' _ [] f = error $ "No such field: " ++ f
+
 resolveRefWithTyName :: Ref -> Resolver (String, UP.Ref, Ty)
 resolveRefWithTyName (RefVar var) = do
     (name, var', ty) <- resolveVarWithTyName var
-    return (name, UP.RefVar var', ty) 
+    return (name, UP.RefVar var', ty)
 resolveRefWithTyName (RefArrayValue ref) = do
     (name, ref', ty) <- resolveRefWithTyName ref
     let eTy = getArrayElemTy ty
     return (name ++ ".value", UP.RefArrayValue ref' $ sizeOfType eTy, eTy)
+resolveRefWithTyName (RefStructField ref field) = do
+    (name, ref', ty) <- resolveRefWithTyName ref
+    let (o, ty') = findFieldOffsetAndTy (getStructFields ty) field
+    return (name ++ "." ++ field, UP.RefStructField ref' o, ty')
 
 resolveRefWithTy :: Ref -> Resolver (UP.Ref, Ty)
 resolveRefWithTy ref = do
@@ -460,10 +479,10 @@ convert proc =
             retVarsBase = argVarsBase + foldl (\sz ty -> sz + sizeOfType ty) 0 rfArgTys
         argRefs' <- forM argRefs resolveRefWithTyName
         retRefs' <- forM retRefs resolveRefWithTyName
-        let calleeArgs = 
+        let calleeArgs =
                 fst $ foldr (\ty (res, base) -> (("CALL_ARG", UP.RefVar $ UP.Var base, ty) : res, base + sizeOfType ty))
                     ([], argVarsBase) rfArgTys
-            calleeRets = 
+            calleeRets =
                 fst $ foldr (\ty (res, base) -> (("CALL_RET", UP.RefVar $ UP.Var base, ty) : res, base + sizeOfType ty))
                     ([], retVarsBase) rfRetTys
         argAssgns <- concat <$> forM (zip calleeArgs argRefs') (uncurry makeAssignment')
@@ -491,7 +510,7 @@ convert proc =
         recordVar dr
         recordVar sr
         addInstructions $ makeAssignment dr sr
-    convertInst' (SProcAlloc var ty) = recordVar' (RefVar var) ty 
+    convertInst' (SProcAlloc var ty) = recordVar' (RefVar var) ty
     convertInst' (SProcArrayGet ar ir) = do
         recordVar ir
         addInstructions $ do
@@ -517,13 +536,27 @@ convert proc =
                 ProcCopyAdd sr' [dr']
               ]
             (TyArray dreTy drSize, TyArray sreTy srSize) -> do
-                unless (drSize == srSize && drTy == srTy) $ 
+                unless (drSize == srSize && drTy == srTy) $
                     error $ "Cannot assign array " ++ sname ++ " to " ++ dname
-                      ++ ". Size {" ++ show sreTy ++ "}" ++ show srSize ++ " not match size {" 
+                      ++ ". Size {" ++ show sreTy ++ "}" ++ show srSize ++ " not match size {"
                       ++ show dreTy ++ "}" ++ show drSize
                 return [ ProcArrayCopy sr' dr' drSize (sizeOfType dreTy) ]
+            (TyStruct dFields, TyStruct sFields) -> do
+                unless (dFields == sFields) $
+                  error $ "Cannot assign struct variable " ++ sname ++ " of type " ++ show srTy
+                     ++ " to struct variable " ++ dname ++ " of type " ++ show drTy
+                makeStructAssignments 0 dFields sFields
             _ -> error $ "Cannot assign variable " ++ sname ++ " of type " ++ show srTy
                     ++ " to variable " ++ dname ++ " of type " ++ show drTy
+        where
+            makeStructAssignments o ((dF, dTy) : dFs) ((sF, sTy) : sFs) = do
+                fAss <- makeAssignment'
+                  (dname ++ "." ++ dF, UP.RefStructField dr' o, dTy)
+                  (sname ++ "." ++ sF, UP.RefStructField sr' o, sTy)
+                fOther <- makeStructAssignments (o + sizeOfType dTy) dFs sFs
+                return $ fAss ++ fOther
+            makeStructAssignments _ [] [] = return []
+            makeStructAssignments _ _ _ = undefined
 
     makeAssignment :: Ref -> Ref -> Resolver [UncheckedProc]
     makeAssignment dr sr = do
@@ -538,12 +571,17 @@ progToString prog = runWriter $ progToString' prog
     progToString' (Program functions) =
         forM_ (intersperse nl $ fmap functionToString functions) id
 
+    tyToString :: Ty -> String
+    tyToString TyInt = "auto"
+    tyToString (TyArray ty n) = tyToString ty ++ "[" ++ show n ++ "]"
+    tyToString (TyStruct fs) = "struct { " ++ unwords (fmap (\(f, ty) -> tyToString ty ++ " " ++ f ++ ";") fs) ++ " }"
+
     argToString :: (String, Ty) -> String
-    argToString (name, ty) = name ++ ": " ++ show ty
+    argToString (name, ty) = tyToString ty ++ " " ++ name
 
     functionToString :: Function -> ProgWriter ()
     functionToString (Function name args rets blocks) = do
-        write $ "function " ++ name ++ "(" ++ intercalate ", " (fmap argToString args) ++ ") [" ++ concatMap show rets ++ "] {"
+        write $ "function " ++ name ++ "(" ++ intercalate ", " (fmap argToString args) ++ ") [" ++ concatMap tyToString rets ++ "] {"
         withIndent $ do
             nl
             forM_ (intersperse nl $ fmap blockToString blocks) id
@@ -565,8 +603,7 @@ progToString prog = runWriter $ progToString' prog
     funcToString :: Func -> String
     funcToString (Func name) = name
 
-    refToString (RefVar v) = varToString v
-    refToString (RefArrayValue ref) = "%" ++ refToString ref ++ ".target"
+    refToString = show
 
     instToString :: SafeProc -> ProgWriter ()
     instToString (SProcGoto lbl) = write $ "goto " ++ lblToString lbl
@@ -589,7 +626,7 @@ progToString prog = runWriter $ progToString' prog
     instToString (SProcReturn refs) =
         write $ "return [" ++ intercalate ", " (fmap refToString refs) ++ "]"
     instToString (SProcAlloc var ty) =
-        write $ "alloc " ++ varToString var ++ "[" ++ show ty ++ "]"
+        write $ "alloc " ++ varToString var ++ " " ++ tyToString ty
     instToString (SProcAssign dr sr) =
         write $ refToString dr ++ " = " ++ refToString sr
     instToString (SProcArrayGet ar ir) =

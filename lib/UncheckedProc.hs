@@ -62,11 +62,12 @@ convertVar (Var i) = UIE.Var $ i + 1
 -- convertVar (ArrTargetVar i s) = UIE.convertRef $ UIE.RefArrayValue (UIE.RefVar $ UIE.Var $ i + 1) s
 convertVar RetVar = UIE.Var 0
 
-data Ref = RefVar Var | RefArrayValue Ref Int
+data Ref = RefVar Var | RefArrayValue Ref Int | RefStructField Ref Int
 
 convertRef :: Ref -> UIE.Ref
 convertRef (RefVar v) = UIE.RefVar $ convertVar v
 convertRef (RefArrayValue ref i) = UIE.RefArrayValue (convertRef ref) i
+convertRef (RefStructField ref o) = UIE.RefStructField (convertRef ref) o
 
 -- mkArrTargetVar :: UIE.Var -> UIE.Var
 -- mkArrTargetVar (Var i) = UIE.Var $ 
@@ -328,6 +329,7 @@ progToString prog = runWriter $ progToString' prog
 
     refToString (RefVar v) = varToString v
     refToString (RefArrayValue ref s) = "%" ++ refToString ref ++ "{" ++ show s ++ "}.target"
+    refToString (RefStructField ref o) = "%" ++ refToString ref ++ "{" ++ show o ++ "}"
 
     funcToString :: Func -> String
     funcToString (Func i) = "func " ++ show i

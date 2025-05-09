@@ -67,7 +67,7 @@ import Control.Monad (forM_)
 -- | pc | tmpa | tmpb | ...
 data Var = Var Int | Pc | TmpA | TmpB
 
-data Ref = RefVar Var | RefArrayValue Ref Int
+data Ref = RefVar Var | RefArrayValue Ref Int | RefStructField Ref Int
 
 convertVar :: Var -> UI.Var
 convertVar (Var i) = UI.Var $ i + 3
@@ -78,6 +78,7 @@ convertVar TmpB = UI.Var 2
 convertRef :: Ref -> UI.Var
 convertRef (RefVar v) = convertVar v
 convertRef (RefArrayValue ref s) = UI.arrayTargetVar (convertRef ref) s
+convertRef (RefStructField ref o) = UI.structOffset (convertRef ref) o
 
 -- mkArrTargetVar :: Var -> Int -> Var
 -- mkArrTargetVar (Var i) s = UI.arrayTargetVar (UI.Var i) s
@@ -280,3 +281,4 @@ progToString prog = runWriter $ progToString' prog
 
     refToString (RefVar v) = varToString v
     refToString (RefArrayValue ref s) = "%" ++ refToString ref ++ "{" ++ show s ++ "}.target"
+    refToString (RefStructField ref o) = "%" ++ refToString ref ++ "{" ++ show o ++ "}"

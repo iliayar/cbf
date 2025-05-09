@@ -21,34 +21,27 @@ evaluate program = do
   putStrLn ""
   putStrLn $ "Memory: " ++ show mem
 
-sumArray :: [Int] -> Program
-sumArray ns =
-  let inits = zipWith (\i v -> StmtAssgnArray (Var "arr") (ExprConst i) (ExprConst v)) [0..] ns in 
+re :: String -> Expr
+re s = ExprRef $ RefVar $ Var s
+
+example :: Program
+example =
+  let sTy = TyStruct [("a", TyInt), ("b", TyArray TyInt 5), ("c", TyInt)] in
   Program
-    [ (Function "main" [] []) $
-        [ StmtAssgn (RefVar $ Var "res") (ExprConst 0),
-          StmtAllocate (Var "arr") $ TyArray TyInt $ length ns
-        ] ++ inits ++
-        [ StmtAssgn (RefVar $ Var "arr") (ExprCall (Func "inc_all") [ExprVar $ Var "arr"]),
-          StmtAssgn (RefVar $ Var "res") (ExprCall (Func "sum") [ExprVar $ Var "arr"])
+    [ (Function "main" [] [])
+        [ StmtAssgn (RefVar $ Var "res") (ExprConst 42),
+          StmtAllocate (Var "s") sTy,
+          StmtAssgn (RefStructField (RefVar $ Var "s") "a") $ ExprConst 10,
+          StmtAssgn (RefVar $ Var "res") (ExprRef $ RefStructField (RefVar $ Var "s") "a"),
+          StmtAssgn (RefArray (RefStructField (RefVar $ Var "s") "b") (ExprConst 1)) $ ExprConst 20,
+          StmtAssgn (RefArray (RefStructField (RefVar $ Var "s") "b") (ExprConst 0)) $ ExprConst 21,
+          StmtAssgn (RefStructField (RefVar $ Var "s") "c") $ ExprConst 121,
+          StmtAssgn (RefVar $ Var "s") (ExprCall (Func "modify_struct") [ExprRef $ RefVar $ Var "s"])
         ],
-      (Function "inc_all" [("arr", TyArray TyInt $ length ns)] [TyArray TyInt $ length ns])
-        [ StmtAssgn (RefVar $ Var "i") (ExprConst $ length ns),
-          StmtWhile (ExprVar $ Var "i")
-            [ StmtAssgn (RefVar $ Var "i") (ExprSub (ExprVar $ Var "i") (ExprConst 1)),
-              StmtAssgn (RefArray (RefVar $ Var "arr") (ExprVar $ Var "i")) (ExprAdd (ExprArrayGet (Var "arr") (ExprVar $ Var "i")) (ExprConst 1))
-              -- StmtAssgnArray (Var "arr") (ExprVar $ Var "i") (ExprAdd (ExprArrayGet (Var "arr") (ExprVar $ Var "i")) (ExprConst 1))
-            ],
-          StmtReturn [ExprVar $ Var "arr"]
-        ],
-      (Function "sum" [("arr", TyArray TyInt $ length ns)] [TyInt])
-        [ StmtAssgn (RefVar $ Var "i") (ExprConst $ length ns),
-          StmtAssgn (RefVar $ Var "res") (ExprConst 0),
-          StmtWhile (ExprVar $ Var "i")
-            [ StmtAssgn (RefVar $ Var "i") (ExprSub (ExprVar $ Var "i") (ExprConst 1)),
-              StmtAssgn (RefVar $ Var "res") (ExprAdd (ExprVar $ Var "res") (ExprArrayGet (Var "arr") (ExprVar $ Var "i")))
-            ],
-          StmtReturn [ExprVar $ Var "res"]
+      (Function "modify_struct" [("s", sTy)] [sTy])
+        [ StmtAssgn (RefArray (RefStructField (RefVar $ Var "s") "b") (ExprConst 2)) $ ExprConst 19,
+          StmtAssgn (RefStructField (RefVar $ Var "s") "a") $ ExprConst 74,
+          StmtReturn [ExprRef $ RefVar $ Var "s"]
         ]
     ]
 
@@ -57,7 +50,7 @@ main = do
   args <- getArgs
   case args of
     [] -> do
-      let procImp = sumArray [1, 2, 3]
+      let procImp = example
       putStrLn "Imp:"
       putStrLn $ Imp.progToString procImp
       let procSafeProc = Imp.convert procImp

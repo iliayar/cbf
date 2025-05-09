@@ -98,7 +98,7 @@ getArrayElemTy :: Ty -> Ty
 getArrayElemTy (TyArray ty _) = ty
 getArrayElemTy _ = undefined
 
-data Ref = RefVar Var | RefArray Ref Expr
+data Ref = RefVar Var | RefArray Ref Expr | RefStructField Ref String
 
 newtype Program = Program [Function]
 
@@ -153,10 +153,12 @@ initFreeForTy ty = do
     st@(ConverterState { cFreeVariables }) <- ST.get
     unless (M.member ty cFreeVariables) $ ST.put $ st { cFreeVariables = M.insert ty S.empty cFreeVariables }
 
-maybeAllocArray :: SP.Var -> Ty -> Converter ()
-maybeAllocArray var ty@(TyArray _ _) = do
+maybeAddAlloc :: SP.Var -> Ty -> Converter ()
+maybeAddAlloc var ty@(TyArray _ _) = do
     addInstructions [ SProcAlloc var $ convertTy ty ]
-maybeAllocArray _ _ = return ()
+maybeAddAlloc var ty@(TyStruct _) = do
+    addInstructions [ SProcAlloc var $ convertTy ty ]
+maybeAddAlloc _ _ = return ()
 
 getTmpVarTy :: SP.Var -> Converter Ty
 getTmpVarTy var = do
@@ -182,7 +184,7 @@ acquireTmpVar ty = do
                 cExprStack = SP.RefVar var : cExprStack,
                 cTmpVarTys = M.insert var ty cTmpVarTys
             }
-            maybeAllocArray var ty
+            maybeAddAlloc var ty
             return $ SP.RefVar var
 
 popTmpVar :: Converter SP.Ref
@@ -240,6 +242,15 @@ setNewVarTy (RefVar (Var name)) ty = do
             ST.put $ st { cTypeContext = M.insert name ty cTypeContext }
 setNewVarTy _ _ = return ()
 
+getStructFieldTy :: Ty -> String -> Ty
+getStructFieldTy (TyStruct fields) field = findField fields field
+    where
+        findField ((f, ty) : fs) f' =
+          if f == f' then ty
+          else findField fs f'
+        findField [] f = error $ "No such field: " ++ f
+getStructFieldTy _ _ = undefined
+
 deriveRefTy :: Ref -> Converter Ty
 deriveRefTy (RefVar (Var name)) = do
     ConverterState { cTypeContext } <- ST.get
@@ -247,6 +258,9 @@ deriveRefTy (RefVar (Var name)) = do
 deriveRefTy (RefArray ref _) = do
     ty <- deriveRefTy ref
     return $ getArrayElemTy ty
+deriveRefTy (RefStructField ref field) = do
+    ty <- deriveRefTy ref
+    return $ getStructFieldTy ty field
 
 addFuncTy :: String -> [Ty] -> [Ty] -> Converter ()
 addFuncTy name argTys retTys = do
@@ -332,6 +346,14 @@ convert (Program functions) =
             discard = do
                 _ <- popTmpVar
                 discard
+        }
+    prepRef (RefStructField ref' field) = do
+        PreparedRef { ref, focus, save, discard } <- prepRef ref'
+        return $ PreparedRef {
+            ref = SP.RefStructField ref field,
+            focus = focus,
+            save = save,
+            discard = discard
         }
 
 
@@ -451,12 +473,12 @@ progToString prog = runWriter $ progToString' prog
       forM_ (intersperse nl $ fmap functionToString functions) id
 
     argToString :: (String, Ty) -> String
-    argToString (name, ty) = name ++ ": " ++ tyToString ty
+    argToString (name, ty) = tyToString ty ++ " " ++ name
 
     tyToString :: Ty -> String
     tyToString TyInt = "auto"
     tyToString (TyArray ty n) = tyToString ty ++ "[" ++ show n ++ "]"
-    tyToString (TyStruct fs) = "struct { " ++ concatMap (\(f, ty) -> tyToString ty ++ " " ++ f ++ ";") fs ++ " }"
+    tyToString (TyStruct fs) = "struct { " ++ unwords (fmap (\(f, ty) -> tyToString ty ++ " " ++ f ++ ";") fs) ++ " }"
 
     functionToString :: Function -> ProgWriter ()
     functionToString (Function name args rets stmts) = do
@@ -510,6 +532,9 @@ progToString prog = runWriter $ progToString' prog
         write "["
         exprToString idx
         write "]"
+    refToString (RefStructField ref field) = do
+        refToString ref
+        write $ "." ++ field
 
     exprToString :: Expr -> ProgWriter ()
     exprToString (ExprRef ref) = refToString ref

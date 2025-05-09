@@ -71,6 +71,9 @@ arrayTargetVar' (Var i) s k = Var $ i + s + k
 arrayTargetIdxVar :: Var -> Int -> Var
 arrayTargetIdxVar (Var i) s = Var $ i + 2*s + 1
 
+structOffset :: Var -> Int -> Var
+structOffset (Var i) o = Var $ i + o
+
 convert :: [UncheckedInst] -> [BrainfuckExt]
 convert = concatMap convert'
   where

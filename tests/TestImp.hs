@@ -109,11 +109,45 @@ sumArray ns =
         ]
     ]
 
+
+
 testSumArray :: [Int] -> Int -> Test
 testSumArray arr res = TestCase $ do
   let prog = sumArray arr
   mem <- evaluate prog
   (mem !! 4) @?= res + length arr
+
+structs :: Program
+structs =
+  let sTy = TyStruct [("a", TyInt), ("b", TyArray TyInt 5), ("c", TyInt)] in
+  Program
+    [ (Function "main" [] [])
+        [ StmtAssgn (RefVar $ Var "res") (ExprConst 42),
+          StmtAllocate (Var "s") sTy,
+          StmtAssgn (RefStructField (RefVar $ Var "s") "a") $ ExprConst 10,
+          StmtAssgn (RefVar $ Var "res") (ExprRef $ RefStructField (RefVar $ Var "s") "a"),
+          StmtAssgn (RefArray (RefStructField (RefVar $ Var "s") "b") (ExprConst 1)) $ ExprConst 20,
+          StmtAssgn (RefArray (RefStructField (RefVar $ Var "s") "b") (ExprConst 0)) $ ExprConst 21,
+          StmtAssgn (RefStructField (RefVar $ Var "s") "c") $ ExprConst 121,
+          StmtAssgn (RefVar $ Var "s") (ExprCall (Func "modify_struct") [ExprRef $ RefVar $ Var "s"])
+        ],
+      (Function "modify_struct" [("s", sTy)] [sTy])
+        [ StmtAssgn (RefArray (RefStructField (RefVar $ Var "s") "b") (ExprConst 2)) $ ExprConst 19,
+          StmtAssgn (RefStructField (RefVar $ Var "s") "a") $ ExprConst 74,
+          StmtReturn [ExprRef $ RefVar $ Var "s"]
+        ]
+    ]
+
+testStructs :: Test
+testStructs = TestCase $ do
+  let prog = structs
+  mem <- evaluate prog
+  (mem !! 5) @?= 10
+  (mem !! 6) @?= 74
+  (mem !! 11) @?= 21
+  (mem !! 12) @?= 20
+  (mem !! 13) @?= 19
+  (mem !! 16) @?= 121
 
 tests :: Test
 tests =
@@ -129,5 +163,6 @@ tests =
       testSumArray [1, 2, 3, 4, 5] 15,
       testSumArray [] 0,
       testSumArray [10] 10,
-      testSumArray [10, 15, 33] 58
+      testSumArray [10, 15, 33] 58,
+      testStructs
     ]
