@@ -56,27 +56,31 @@ data SafeProc
   | SProcCall Func [Var] [Var]
   | SProcReturn [Var]
   | SProcAssign Var Var
-  | SProcArrayAlloc Var Int
+  | SProcAlloc Var Ty
   | SProcArrayGet Var Var
   | SProcArraySet Var Var
 
 data Block = Block String [SafeProc]
 
-data Function = Function String [(String, VarType)] [VarType] [Block]
+data Function = Function String [(String, Ty)] [Ty] [Block]
 
-data VarType = TyVar | TyArray Int
-    deriving (Show)
+data Ty = TyInt | TyArray Ty Int
+    deriving (Show, Eq)
 
-sizeOfType :: VarType -> Int
-sizeOfType TyVar = 1
-sizeOfType (TyArray n) = UI.arraySize n
+getArrayElemSize :: Ty -> Int
+getArrayElemSize (TyArray ty _) = sizeOfType ty
+getArrayElemSize _ = undefined
 
-isVarTy :: VarType -> Bool
-isVarTy TyVar = True
+sizeOfType :: Ty -> Int
+sizeOfType TyInt = 1
+sizeOfType (TyArray ty n) = UI.arraySize n $ sizeOfType ty
+
+isVarTy :: Ty -> Bool
+isVarTy TyInt = True
 isVarTy _ = False
 
-isArrayTy :: VarType -> Bool
-isArrayTy (TyArray _) = True
+isArrayTy :: Ty -> Bool
+isArrayTy (TyArray _ _) = True
 isArrayTy _ = False
 
 newtype Program = Program [Function]
@@ -85,13 +89,13 @@ data ConverterState = ConverterState
   { cFunctionsMapping :: M.Map String Int,
     cFunctionsCnt :: Int,
     cCurrentFunction :: Maybe String,
-    cFunctions :: M.Map String ([(String, VarType)], [VarType]),
+    cFunctions :: M.Map String ([(String, Ty)], [Ty]),
     cResult :: Resolver [[[UncheckedProc]]],
     cCurrentFunctionBlocks :: Resolver [[UncheckedProc]],
     cCurrentBlockInsts :: Resolver [UncheckedProc],
     cBlocksMapping :: M.Map (String, String) Int,
     cBlocksCnt :: Int,
-    cVariables :: M.Map String (M.Map String VarType)
+    cVariables :: M.Map String (M.Map String Ty)
   }
 
 type Converter = ST.State ConverterState
@@ -176,7 +180,7 @@ addInstructions insts = do
 addInstructionsPure :: [UncheckedProc] -> Converter ()
 addInstructionsPure = addInstructions . return
 
-recordVar' :: Var -> VarType -> Converter ()
+recordVar' :: Var -> Ty -> Converter ()
 recordVar' (Var name) ty = do
   st@(ConverterState {cVariables}) <- ST.get
   currentFunc <- currentFunction
@@ -193,17 +197,17 @@ recordVar' (Var name) ty = do
 recordVar' (ArrayTargetVar _) _ = return ()
 
 recordVar :: Var -> Converter ()
-recordVar var = recordVar' var TyVar
+recordVar var = recordVar' var TyInt
 
 data ResolverState = ResolverState
   { rBlocksMapping :: M.Map (String, String) Int,
     rFunctionsMapping :: M.Map String Int,
-    rFunctions :: M.Map String ([(String, VarType)], [VarType]),
+    rFunctions :: M.Map String ([(String, Ty)], [Ty]),
     rLocalsSize :: M.Map String Int,
     rCurrentFunction :: Maybe String,
     rVarsCnt :: Int,
     rVars :: M.Map String Int,
-    rVarTypes :: M.Map String (M.Map String VarType)
+    rTys :: M.Map String (M.Map String Ty)
   }
 
 type Resolver = ST.State ResolverState
@@ -238,19 +242,19 @@ resolveFinishFunction = do
       { rCurrentFunction = Nothing
       }
 
-resolveVarType :: Var -> Resolver VarType
-resolveVarType (Var name) = do
-    ResolverState {rVarTypes} <- ST.get
+resolveTy :: Var -> Resolver Ty
+resolveTy (Var name) = do
+    ResolverState {rTys} <- ST.get
     currentFunc <- resolveCurrentFunction
-    return $ case M.lookup name $ rVarTypes M.! currentFunc of
+    return $ case M.lookup name $ rTys M.! currentFunc of
         Nothing -> error $ "Unknown type of variable " ++ name ++ ". Probably array was not allocated"
         Just ty -> ty
-resolveVarType (ArrayTargetVar name) = do
-    _ <- resolveVarType (Var name)
-    return TyVar
+resolveTy (ArrayTargetVar name) = do
+    _ <- resolveTy (Var name)
+    return TyInt
 
 resolveVarSize :: Var -> Resolver Int
-resolveVarSize v = sizeOfType <$> resolveVarType v
+resolveVarSize v = sizeOfType <$> resolveTy v
 
 resolveVar :: Var -> Resolver UP.Var
 resolveVar v@(Var name) =
@@ -267,21 +271,21 @@ resolveVar v@(Var name) =
         return rVarsCnt
       Just idx -> return idx
 resolveVar (ArrayTargetVar name) = do
-    v' <- resolveVar (Var name)
+    (v', aTy) <- resolveVarWithTy (Var name)
     case v' of
-        UP.Var idx -> return $ UP.ArrTargetVar idx
+        UP.Var idx -> return $ UP.ArrTargetVar idx (getArrayElemSize aTy)
         _ -> error "Array expected to resolve in Var"
 
-resolveVarWithTy :: Var -> Resolver (UP.Var, VarType)
+resolveVarWithTy :: Var -> Resolver (UP.Var, Ty)
 resolveVarWithTy v = do
     v' <- resolveVar v
-    ty <- resolveVarType v
+    ty <- resolveTy v
     return (v', ty)
 
-resolveVarWithTyName :: Var -> Resolver (String, UP.Var, VarType)
+resolveVarWithTyName :: Var -> Resolver (String, UP.Var, Ty)
 resolveVarWithTyName v = do
     v' <- resolveVar v
-    ty <- resolveVarType v
+    ty <- resolveTy v
     return (show v, v', ty)
 
 makeRetVar :: String -> Int -> String
@@ -293,7 +297,7 @@ resolveLbl (Lbl name) = do
   currentFunc <- resolveCurrentFunction
   return $ UP.Lbl $ rBlocksMapping M.! (currentFunc, name)
 
-data ResolvedFunc = ResolvedFunc {rfIdx :: Int, rfArgTys :: [VarType], rfRetTys :: [VarType]}
+data ResolvedFunc = ResolvedFunc {rfIdx :: Int, rfArgTys :: [Ty], rfRetTys :: [Ty]}
 
 resolveFunc :: Func -> Resolver ResolvedFunc
 resolveFunc (Func name) = do
@@ -312,7 +316,7 @@ resolveLocalsSize = do
   currentFunc <- resolveCurrentFunction
   return $ rLocalsSize M.! currentFunc
 
-getLocalsSize :: M.Map String VarType -> Int
+getLocalsSize :: M.Map String Ty -> Int
 getLocalsSize = M.foldl (\a t -> sizeOfType t + a) 0
 
 convert :: Program -> [[[UncheckedProc]]]
@@ -340,7 +344,7 @@ convert proc =
                 rCurrentFunction = Nothing,
                 rVarsCnt = 0,
                 rVars = M.empty,
-                rVarTypes = cVariables converter
+                rTys = cVariables converter
               }
        in let (res, _) = ST.runState (cResult converter) resolver
            in reverse (fmap reverse res)
@@ -469,7 +473,7 @@ convert proc =
         recordVar dv
         recordVar sv
         addInstructions $ makeAssignment dv sv
-    convertInst' (SProcArrayAlloc var size) = recordVar' var (TyArray size) 
+    convertInst' (SProcAlloc var ty) = recordVar' var ty 
     convertInst' (SProcArrayGet av iv) = do
         recordVar iv
         addInstructions $ do
@@ -477,7 +481,7 @@ convert proc =
             (av', aTy) <- resolveVarWithTy av
             unless (isVarTy iTy) $ error "Index in ArrayGet must be of type VarTy"
             unless (isArrayTy aTy) $ error "Array in ArrayGet must be of type VarTy"
-            return [ ProcArrayGet av' iv' ]
+            return [ ProcArrayGet av' iv' (getArrayElemSize aTy) ]
     convertInst' (SProcArraySet av iv) = do
         recordVar iv
         addInstructions $ do
@@ -485,20 +489,21 @@ convert proc =
             (av', aTy) <- resolveVarWithTy av
             unless (isVarTy iTy) $ error "Index in ArrayGet must be of type VarTy"
             unless (isArrayTy aTy) $ error "Array in ArrayGet must be of type VarTy"
-            return [ ProcArraySet av' iv' ]
+            return [ ProcArraySet av' iv' (getArrayElemSize aTy) ]
 
-    makeAssignment' :: (String, UP.Var, VarType) -> (String, UP.Var, VarType) -> Resolver [UncheckedProc]
+    makeAssignment' :: (String, UP.Var, Ty) -> (String, UP.Var, Ty) -> Resolver [UncheckedProc]
     makeAssignment' (dname, dv', dvTy) (sname, sv', svTy) = do
         case (dvTy, svTy) of
-            (TyVar, TyVar) -> return
+            (TyInt, TyInt) -> return
               [ ProcConst dv' 0,
                 ProcCopyAdd sv' [dv']
               ]
-            (TyArray dvSize, TyArray svSize) -> do
-                unless (dvSize == svSize) $ 
+            (TyArray dveTy dvSize, TyArray sveTy svSize) -> do
+                unless (dvSize == svSize && dvTy == svTy) $ 
                     error $ "Cannot assign array " ++ sname ++ " to " ++ dname
-                      ++ ". Size " ++ show svSize ++ " not match size " ++ show dvSize
-                return [ ProcArrayCopy sv' dv' dvSize ]
+                      ++ ". Size {" ++ show sveTy ++ "}" ++ show svSize ++ " not match size {" 
+                      ++ show dveTy ++ "}" ++ show dvSize
+                return [ ProcArrayCopy sv' dv' dvSize (sizeOfType dveTy) ]
             _ -> error $ "Cannot assign variable " ++ sname ++ " of type " ++ show svTy
                     ++ " to variable " ++ dname ++ " of type " ++ show dvTy
 
@@ -515,7 +520,7 @@ progToString prog = runWriter $ progToString' prog
     progToString' (Program functions) =
         forM_ (intersperse nl $ fmap functionToString functions) id
 
-    argToString :: (String, VarType) -> String
+    argToString :: (String, Ty) -> String
     argToString (name, ty) = name ++ ": " ++ show ty
 
     functionToString :: Function -> ProgWriter ()
@@ -562,8 +567,8 @@ progToString prog = runWriter $ progToString' prog
             ++ " [" ++ intercalate ", " (fmap varToString rets) ++ "]"
     instToString (SProcReturn vars) =
         write $ "return [" ++ intercalate ", " (fmap varToString vars) ++ "]"
-    instToString (SProcArrayAlloc var size) =
-        write $ "alloc " ++ varToString var ++ "[" ++ show size ++ "]"
+    instToString (SProcAlloc var ty) =
+        write $ "alloc " ++ varToString var ++ "[" ++ show ty ++ "]"
     instToString (SProcAssign dv sv) =
         write $ varToString dv ++ " = " ++ varToString sv
     instToString (SProcArrayGet av iv) =

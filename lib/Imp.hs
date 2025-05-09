@@ -83,17 +83,17 @@ data Stmt
   | StmtWhile Expr [Stmt]
   | StmtCallAssgn [Var] Func [Expr]
   | StmtReturn [Expr]
-  | StmtAllocateArray Var Int
+  | StmtAllocate Var Ty
   | StmtAssgnArray Var Expr Expr
 
 data Function = Function String [(String, Ty)] [Ty] [Stmt]
 
-data Ty = TyInt | TyArray Int
+data Ty = TyInt | TyArray Ty Int
     deriving (Eq, Ord)
 
-convertTy :: Ty -> SP.VarType
-convertTy TyInt = SP.TyVar
-convertTy (TyArray n) = SP.TyArray n
+convertTy :: Ty -> SP.Ty
+convertTy TyInt = SP.TyInt
+convertTy (TyArray ty n) = SP.TyArray (convertTy ty) n
 
 newtype Program = Program [Function]
 
@@ -148,8 +148,8 @@ initFreeForTy ty = do
     unless (M.member ty cFreeVariables) $ ST.put $ st { cFreeVariables = M.insert ty S.empty cFreeVariables }
 
 maybeAllocArray :: SP.Var -> Ty -> Converter ()
-maybeAllocArray var (TyArray size) = do
-    addInstructions [ SProcArrayAlloc var size ]
+maybeAllocArray var ty@(TyArray _ _) = do
+    addInstructions [ SProcAlloc var $ convertTy ty ]
 maybeAllocArray _ _ = return ()
 
 
@@ -322,9 +322,9 @@ convert (Program functions) =
       forM_ rets convertExpr'
       retVars <- replicateM (length rets) popTmpVar
       addInstructions [SProcReturn (reverse retVars)]
-    convertStmt (StmtAllocateArray var size) = do
-        addVarTy var (TyArray size)
-        addInstructions [SProcArrayAlloc (convertVar var) size]
+    convertStmt (StmtAllocate var ty) = do
+        addVarTy var ty
+        addInstructions [SProcAlloc (convertVar var) $ convertTy ty]
     convertStmt (StmtAssgnArray (Var name) idxExpr expr) = do
       (value, _) <- convertExpr expr
       addInstructions [ SProcAssign (SP.ArrayTargetVar name) value ]
@@ -392,8 +392,8 @@ progToString prog = runWriter $ progToString' prog
     argToString (name, ty) = name ++ ": " ++ tyToString ty
 
     tyToString :: Ty -> String
-    tyToString TyInt = "int"
-    tyToString (TyArray n) = "int[" ++ show n ++ "]"
+    tyToString TyInt = "auto"
+    tyToString (TyArray ty n) = tyToString ty ++ "[" ++ show n ++ "]"
 
     functionToString :: Function -> ProgWriter ()
     functionToString (Function name args rets stmts) = do
@@ -430,8 +430,8 @@ progToString prog = runWriter $ progToString' prog
     stmtToString (StmtReturn rets) = do
       write "return "
       forM_ (intersperse (write ", ") $ fmap exprToString rets) id
-    stmtToString (StmtAllocateArray var size) = do
-        write $ "auto " ++ varToString var ++ "[" ++ show size ++ "]"
+    stmtToString (StmtAllocate var ty) = do
+        write $ tyToString ty ++ " " ++ varToString var
     stmtToString (StmtAssgnArray arrVar idxExpr expr) = do
         write $ varToString arrVar ++ "["
         exprToString idxExpr

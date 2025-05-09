@@ -21,29 +21,6 @@ evaluate program = do
   putStrLn ""
   putStrLn $ "Memory: " ++ show mem
 
--- example :: Program
--- example =
---   Program
---     [ (Function "main" [] 0)
---         [ StmtAssgn (Var "res") (ExprCall (Func "fact") [ExprConst 10])
---         ],
---       (Function "mult" ["a", "b"] 1)
---         [ StmtAssgn (Var "res") (ExprConst 0),
---           StmtWhile (ExprVar (Var "a")) 
---             [ StmtAssgn (Var "res") (ExprAdd (ExprVar (Var "res")) (ExprVar (Var "b")))
---             , StmtAssgn (Var "a") (ExprSub (ExprVar (Var "a")) (ExprConst 1))
---             ],
---           StmtReturn [ExprVar (Var "res")]
---         ],
---       (Function "fact" ["a"] 1)
---         [ StmtIf (ExprVar (Var "a"))
---             [ StmtReturn [ExprCall (Func "mult") [ExprVar (Var "a"), ExprCall (Func "fact") [ExprSub (ExprVar (Var "a")) (ExprConst 1)]]]
---             ]
---             [ StmtReturn [ExprConst 1]
---             ]
---         ]
---     ]
-
 fact :: Int -> Program
 fact n =
   Program
@@ -89,8 +66,8 @@ main = do
       putStrLn "SafeProc:"
       putStrLn $ SafeProc.progToString procSafeProc
       let procProc = SafeProc.convert procSafeProc
-      -- putStrLn "UncheckedProc:"
-      -- putStrLn $ UncheckedProc.progToString procProc
+      putStrLn "UncheckedProc:"
+      putStrLn $ UncheckedProc.progToString procProc
       let procInstsExt = UncheckedProc.convert procProc
       -- putStrLn "UncheckedInstExt:"
       -- putStrLn $ UncheckedInstsExt.progToString procInstsExt

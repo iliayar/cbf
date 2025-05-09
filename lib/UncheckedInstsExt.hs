@@ -3,10 +3,8 @@ module UncheckedInstsExt where
 import Data.List (intercalate, intersperse)
 import UncheckedInsts (UncheckedInst (..))
 import qualified UncheckedInsts as UI
-import qualified Data.Map as M
-import qualified Data.Set as S
 import ProgWriter
-import Control.Monad (forM_, unless)
+import Control.Monad (forM_)
 
 -- More high level version of Inst with labels and gotos
 -- The structure of program:
@@ -67,10 +65,10 @@ import Control.Monad (forM_, unless)
 
 -- | 0  | 1    | 2    | ...
 -- | pc | tmpa | tmpb | ...
-data Var = ArrTargetVar Int | Var Int | Pc | TmpA | TmpB
+data Var = ArrTargetVar Int Int | Var Int | Pc | TmpA | TmpB
 
 convertVar :: Var -> UI.Var
-convertVar (ArrTargetVar i) = UI.arrayTargetVar $ convertVar $ Var i
+convertVar (ArrTargetVar i s) = UI.arrayTargetVar (convertVar $ Var i) s
 convertVar (Var i) = UI.Var $ i + 3
 convertVar Pc = UI.Var 0
 convertVar TmpA = UI.Var 1
@@ -91,9 +89,9 @@ data UncheckedInstExt
   | InsExtRead Var
   | InsExtWrite Var
   | InsExtIntrinsic [UncheckedInst]
-  | InsExtArrayCopy Var Var Int
-  | InsExtArrayGet Var Var
-  | InsExtArraySet Var Var
+  | InsExtArrayCopy Var Var Int Int
+  | InsExtArrayGet Var Var Int
+  | InsExtArraySet Var Var Int
 
 convert :: [[UncheckedInstExt]] -> [UncheckedInst]
 convert = convertBlocks
@@ -121,22 +119,22 @@ convert = convertBlocks
     convert' (InsExtRead v) = [InstRead (convertVar v)]
     convert' (InsExtWrite v) = [InstWrite (convertVar v)]
     convert' (InsExtIntrinsic prog) = prog
-    convert' (InsExtArrayCopy fv tv sz) =
-      [ InstConst (UI.arrayTargetIdxVar $ convertVar fv) sz,
-        InstConst (UI.arrayTargetVar $ convertVar fv) 0,
-        InstArrCopy (convertVar fv) (convertVar tv)
+    convert' (InsExtArrayCopy fv tv sz se) =
+      fmap (\k -> InstConst (UI.arrayTargetVar' (convertVar fv) se k) 0) [0..se-1] ++
+      [ InstConst (UI.arrayTargetIdxVar (convertVar fv) se) sz,
+        InstArrCopy (convertVar fv) (convertVar tv) se
       ]
-    convert' (InsExtArrayGet av iv) =
+    convert' (InsExtArrayGet av iv s) =
       [ InstConst (convertVar TmpA) 0,
-        InstMoveAdd (convertVar iv) [convertVar TmpA, UI.arrayTargetIdxVar $ convertVar av],
+        InstMoveAdd (convertVar iv) [convertVar TmpA, UI.arrayTargetIdxVar (convertVar av) s],
         InstMoveAdd (convertVar TmpA) [convertVar iv],
-        InstArrGet (convertVar av)
+        InstArrGet (convertVar av) s
       ]
-    convert' (InsExtArraySet av iv) =
+    convert' (InsExtArraySet av iv s) =
       [ InstConst (convertVar TmpA) 0,
-        InstMoveAdd (convertVar iv) [convertVar TmpA, UI.arrayTargetIdxVar $ convertVar av],
+        InstMoveAdd (convertVar iv) [convertVar TmpA, UI.arrayTargetIdxVar (convertVar av) s],
         InstMoveAdd (convertVar TmpA) [convertVar iv],
-        InstArrSet (convertVar av)
+        InstArrSet (convertVar av) s
       ]
 
     convertBlock :: [UncheckedInstExt] -> [UncheckedInst]
@@ -258,15 +256,15 @@ progToString prog = runWriter $ progToString' prog
     instToString (InsExtIntrinsic prog') = do
         write "Intrinsic:"
         withIndent $ nl >> UI.progToString' prog'
-    instToString (InsExtArrayCopy fv tv sz) =
-        write $ varToString tv ++ "[0.." ++ show sz ++ "] = " ++ varToString fv ++ "[0.." ++ show sz ++ "]"
-    instToString (InsExtArrayGet av iv) =
-        write $ "set " ++ varToString av ++ "[" ++ varToString iv ++ "]"
-    instToString (InsExtArraySet av iv) =
-        write $  "get " ++ varToString av ++ "[" ++ varToString iv ++ "]"
+    instToString (InsExtArrayCopy fv tv sz s) =
+        write $ varToString tv ++ "{" ++ show s ++ "}[0.." ++ show sz ++ "] = " ++ varToString fv ++ "[0.." ++ show sz ++ "]"
+    instToString (InsExtArrayGet av iv s) =
+        write $ "set{" ++ show s ++ "} " ++ varToString av ++ "[" ++ varToString iv ++ "]"
+    instToString (InsExtArraySet av iv s) =
+        write $  "get{" ++ show s ++ "} " ++ varToString av ++ "[" ++ varToString iv ++ "]"
 
     varToString (Var i) = "%" ++ show i
-    varToString (ArrTargetVar i) = "%" ++ show i ++ ".target"
+    varToString (ArrTargetVar i s) = "%" ++ show i ++ "{" ++ show s ++ "}.target"
     varToString Pc = "%pc"
     varToString TmpA = "%tmpa"
     varToString TmpB = "%tmpb"

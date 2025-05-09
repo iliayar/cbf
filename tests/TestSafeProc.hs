@@ -5,7 +5,7 @@ module TestSafeProc where
 
 import qualified BasicExt
 import Executer (execute)
-import SafeProc (Block (..), Func (..), Function (..), Lbl (..), Program (..), SafeProc (..), Var (..), VarType (..))
+import SafeProc (Block (..), Func (..), Function (..), Lbl (..), Program (..), SafeProc (..), Var (..), Ty (..))
 import qualified SafeProc
 import Test.HUnit
 import qualified UncheckedInsts
@@ -31,7 +31,7 @@ mult n m =
               SProcCall (Func "mult") [Var "a", Var "b"] [Var "c"]
             ]
         ],
-      (Function "mult" [("a", TyVar), ("b", TyVar)] [TyVar])
+      (Function "mult" [("a", TyInt), ("b", TyInt)] [TyInt])
         [ (Block "init")
             [ SProcConst (Var "ONE") 1,
               SProcConst (Var "res") 0
@@ -58,7 +58,7 @@ fact n =
         , SProcCall (Func "fact") [Var "a"] [Var "a"]
         ]
       ]
-    , (Function "mult" [("a", TyVar), ("b", TyVar)] [TyVar])
+    , (Function "mult" [("a", TyInt), ("b", TyInt)] [TyInt])
         [ (Block "init")
           [ SProcConst (Var "ONE") 1
           , SProcConst (Var "res") 0
@@ -75,7 +75,7 @@ fact n =
         , (Block "return")
           [ SProcReturn [Var "res"] ]
         ]
-    , (Function "fact" [("a", TyVar)] [TyVar])
+    , (Function "fact" [("a", TyInt)] [TyInt])
       [ (Block "init")
         [ SProcBranch (Var "a") (Lbl "step") (Lbl "base")
         ]
@@ -115,12 +115,12 @@ sumArray arr =
     [ (Function "main" [] [])
         [ (Block "init") $
             [ SProcConst (Var "b") 0,
-              SProcArrayAlloc (Var "a") $ length arr
+              SProcAlloc (Var "a") $ TyArray TyInt $ length arr
             ] ++ inits ++
             [ SProcCall (Func "inc_all") [Var "a"] [Var "a"],
               SProcCall (Func "sum") [Var "a"] [Var "b"] ]
         ],
-      (Function "sum" [("a", TyArray $ length arr)] [TyVar])
+      (Function "sum" [("a", TyArray TyInt $ length arr)] [TyInt])
         [ (Block "init")
             [ SProcConst (Var "ONE") 1,
               SProcConst (Var "res") 0,
@@ -139,7 +139,7 @@ sumArray arr =
           (Block "return")
             [SProcReturn [Var "res"]]
         ],
-      (Function "inc_all" [("a", TyArray $ length arr)] [TyArray $ length arr])
+      (Function "inc_all" [("a", TyArray TyInt $ length arr)] [TyArray TyInt $ length arr])
         [ (Block "init")
             [ SProcConst (Var "ONE") 1,
               SProcConst (Var "i") $ length arr

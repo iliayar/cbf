@@ -199,9 +199,9 @@ sumArray arr =
       [
         ProcConst (Var 2) 1,
         ProcCopySub (Var 2) [Var 1],
-        ProcConst (ArrTargetVar 3) 0,
-        ProcArrayGet (Var 3) (Var 1),
-        ProcCopyAdd (ArrTargetVar 3) [Var 0],
+        ProcConst (ArrTargetVar 3 1) 0,
+        ProcArrayGet (Var 3) (Var 1) 1,
+        ProcCopyAdd (ArrTargetVar 3 1) [Var 0],
         ProcGoto (Lbl 1)
       ]
     ]
@@ -210,8 +210,8 @@ sumArray arr =
     initElem :: Int -> Int -> [UncheckedProc]
     initElem idx val =
       [ ProcConst (Var 1) idx,
-        ProcConst (ArrTargetVar 3) val,
-        ProcArraySet (Var 3) (Var 1)
+        ProcConst (ArrTargetVar 3 1) val,
+        ProcArraySet (Var 3) (Var 1) 1
       ]
 
 testSumArray :: [Int] -> Int -> Test

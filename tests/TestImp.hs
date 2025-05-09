@@ -82,12 +82,12 @@ sumArray ns =
   Program
     [ (Function "main" [] []) $
         [ StmtAssgn (Var "res") (ExprConst 0),
-          StmtAllocateArray (Var "arr") $ length ns
+          StmtAllocate (Var "arr") $ TyArray TyInt $ length ns
         ] ++ inits ++
         [ StmtAssgn (Var "arr") (ExprCall (Func "inc_all") [ExprVar $ Var "arr"]),
           StmtAssgn (Var "res") (ExprCall (Func "sum") [ExprVar $ Var "arr"])
         ],
-      (Function "inc_all" [("arr", TyArray $ length ns)] [TyArray $ length ns])
+      (Function "inc_all" [("arr", TyArray TyInt $ length ns)] [TyArray TyInt $ length ns])
         [ StmtAssgn (Var "i") (ExprConst $ length ns),
           StmtWhile (ExprVar $ Var "i")
             [ StmtAssgn (Var "i") (ExprSub (ExprVar $ Var "i") (ExprConst 1)),
@@ -95,7 +95,7 @@ sumArray ns =
             ],
           StmtReturn [ExprVar $ Var "arr"]
         ],
-      (Function "sum" [("arr", TyArray $ length ns)] [TyInt])
+      (Function "sum" [("arr", TyArray TyInt $ length ns)] [TyInt])
         [ StmtAssgn (Var "i") (ExprConst $ length ns),
           StmtAssgn (Var "res") (ExprConst 0),
           StmtWhile (ExprVar $ Var "i")

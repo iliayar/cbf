@@ -44,9 +44,9 @@ sumArray arr =
     [
       InsExtConst (Var 2) 1,
       InsExtCopySub (Var 2) [Var 1],
-      InsExtConst (ArrTargetVar 3) 0,
-      InsExtArrayGet (Var 3) (Var 1),
-      InsExtCopyAdd (ArrTargetVar 3) [Var 0],
+      InsExtConst (ArrTargetVar 3 1) 0,
+      InsExtArrayGet (Var 3) (Var 1) 1,
+      InsExtCopyAdd (ArrTargetVar 3 1) [Var 0],
       InsExtGoto (Lbl 1)
     ]
   ]
@@ -54,8 +54,8 @@ sumArray arr =
     initElem :: Int -> Int -> [UncheckedInstExt]
     initElem idx val =
       [ InsExtConst (Var 1) idx,
-        InsExtConst (ArrTargetVar 3) val,
-        InsExtArraySet (Var 3) (Var 1)
+        InsExtConst (ArrTargetVar 3 1) val,
+        InsExtArraySet (Var 3) (Var 1) 1
       ]
 
 testSumArray :: [Int] -> Int -> Test

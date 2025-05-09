@@ -55,11 +55,11 @@ import ProgWriter
 --
 -- every block that doesn't ends with branch or goto, will implicitly get it
 
-data Var = ArrTargetVar Int | Var Int | RetVar
+data Var = ArrTargetVar Int Int | Var Int | RetVar
 
 convertVar :: Var -> UIE.Var
 convertVar (Var i) = UIE.Var $ i + 1
-convertVar (ArrTargetVar i) = UIE.ArrTargetVar $ i + 1
+convertVar (ArrTargetVar i s) = UIE.ArrTargetVar (i + 1) s
 convertVar RetVar = UIE.Var 0
 
 data Lbl = Lbl Int | Exit | Ret
@@ -75,9 +75,9 @@ data UncheckedProc
   | ProcRead Var
   | ProcWrite Var
   | ProcCall Func Int
-  | ProcArrayCopy Var Var Int
-  | ProcArrayGet Var Var
-  | ProcArraySet Var Var
+  | ProcArrayCopy Var Var Int Int
+  | ProcArrayGet Var Var Int
+  | ProcArraySet Var Var Int
 
 isTerminator :: UncheckedInstExt -> Bool
 isTerminator (InsExtGoto _) = True
@@ -284,9 +284,9 @@ convert proc =
       addInstructionsPure
         [InsExtIntrinsic [InstIntrinsic [BfExtMoveLeft n]]]
       addInstructions (return [])
-    convertInst' _ (ProcArrayCopy fv tv sz) = addInstructionsPure [InsExtArrayCopy (convertVar fv) (convertVar tv) sz]
-    convertInst' _ (ProcArrayGet av iv) = addInstructionsPure [InsExtArrayGet (convertVar av) (convertVar iv)]
-    convertInst' _ (ProcArraySet av iv) = addInstructionsPure [InsExtArraySet (convertVar av) (convertVar iv)]
+    convertInst' _ (ProcArrayCopy fv tv sz s) = addInstructionsPure [InsExtArrayCopy (convertVar fv) (convertVar tv) sz s]
+    convertInst' _ (ProcArrayGet av iv s) = addInstructionsPure [InsExtArrayGet (convertVar av) (convertVar iv) s]
+    convertInst' _ (ProcArraySet av iv s) = addInstructionsPure [InsExtArraySet (convertVar av) (convertVar iv) s]
 
 progToString :: [[[UncheckedProc]]] -> String
 progToString prog = runWriter $ progToString' prog
@@ -315,7 +315,7 @@ progToString prog = runWriter $ progToString' prog
 
     varToString :: Var -> String
     varToString (Var i) = "%" ++ show i
-    varToString (ArrTargetVar i) = "%" ++ show i ++ ".target"
+    varToString (ArrTargetVar i s) = "%" ++ show i ++ "{" ++ show s ++ "}.target"
     varToString RetVar = "%ret"
 
     funcToString :: Func -> String
@@ -337,9 +337,9 @@ progToString prog = runWriter $ progToString' prog
     instToString (ProcRead v) = write $ "read " ++ varToString v
     instToString (ProcWrite v) = write $ "write " ++ varToString v
     instToString (ProcCall f n) = write $ "call[" ++ show n ++ "] " ++ funcToString f
-    instToString (ProcArrayCopy fv tv sz) =
-        write $ varToString tv ++ "[0.." ++ show sz ++ "] = " ++ varToString fv ++ "[0.." ++ show sz ++ "]"
-    instToString (ProcArrayGet av iv) =
-        write $ "set " ++ varToString av ++ "[" ++ varToString iv ++ "]"
-    instToString (ProcArraySet av iv) =
-        write $  "get " ++ varToString av ++ "[" ++ varToString iv ++ "]"
+    instToString (ProcArrayCopy fv tv sz s) =
+        write $ varToString tv ++ "{" ++ show s ++ "}[0.." ++ show sz ++ "] = " ++ varToString fv ++ "[0.." ++ show sz ++ "]"
+    instToString (ProcArrayGet av iv s) =
+        write $ "set{" ++ show s ++ "}" ++ varToString av ++ "[" ++ varToString iv ++ "]"
+    instToString (ProcArraySet av iv s) =
+        write $  "get{" ++ show s ++ "}" ++ varToString av ++ "[" ++ varToString iv ++ "]"

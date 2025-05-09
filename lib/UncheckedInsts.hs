@@ -55,210 +55,342 @@ data UncheckedInst
   | InstRead Var
   | InstWrite Var
   | InstIntrinsic [BrainfuckExt]
-  | InstArrGet Var
-  | InstArrSet Var
-  | InstArrCopy Var Var
+  | InstArrGet Var Int
+  | InstArrSet Var Int
+  | InstArrCopy Var Var Int
 
-arraySize :: Int -> Int
-arraySize n = 4 + n
+arraySize :: Int -> Int -> Int
+arraySize n s = 2 * s + 2 + n * s
 
-arrayTargetVar :: Var -> Var
-arrayTargetVar (Var i) = Var $ i + 1
+arrayTargetVar :: Var -> Int -> Var
+arrayTargetVar v s = arrayTargetVar' v s 0
 
-arrayTargetIdxVar :: Var -> Var
-arrayTargetIdxVar (Var i) = Var $ i + 3
+arrayTargetVar' :: Var -> Int -> Int -> Var
+arrayTargetVar' (Var i) s k = Var $ i + s + k
+
+arrayTargetIdxVar :: Var -> Int -> Var
+arrayTargetIdxVar (Var i) s = Var $ i + 2*s + 1
 
 convert :: [UncheckedInst] -> [BrainfuckExt]
 convert = concatMap convert'
   where
-    -- [ > [ - <4 + >4 ] < [ - > + < ] < [ - > + < ] >2 + > - ]
-    arrayFwd :: [BrainfuckExt]
-    arrayFwd =
-      [ -- [ > [ - <4 + >4 ]
-        BfExtLoopBegin,
-        BfExtMoveRight 1,
-        BfExtLoopBegin,
-        BfExtDec 1,
-        BfExtMoveLeft 4,
-        BfExtInc 1,
-        BfExtMoveRight 4,
-        BfExtLoopEnd,
-
-        -- < [ - > + < ]
-        BfExtMoveLeft 1,
+    -- [ 
+    --   {>k [ - <(k + 1 + 2*s) >(k - 1) + <(k - 1) >(2*s + 1 + k) ] <k}(k=1..s)
+    --   [ - >s + <s ] < [ - >s + <s ] 
+    --   <s { >(k - 1) [ - >s + <s ] <(k - 1) }(k=1..s)
+    --   >(2*s) + > -
+    -- ]
+    arrayFwd :: Int -> [BrainfuckExt]
+    arrayFwd s =
+      -- [
+      [BfExtLoopBegin] ++
+      -- {>k [ - <(k + 1 + 2*s) >(k - 1) + <(k - 1) >(2*s + 1 + k) ] <k}(k=1..s)
+      concatMap (\k -> [
+        BfExtMoveRight k,
         BfExtLoopBegin,
         BfExtDec 1,
-        BfExtMoveRight 1,
+        BfExtMoveLeft $ k + 1 + 2*s,
+        BfExtMoveRight $ k  - 1,
         BfExtInc 1,
-        BfExtMoveLeft 1,
+        BfExtMoveLeft $ k - 1,
+        BfExtMoveRight $ 2*s + 1 + k,
         BfExtLoopEnd,
+        BfExtMoveLeft k
+      ]) [1..s] ++
 
-        -- < [ - > + < ]
+      [ -- [ - >s + <s ] < [ - >s + <s ]
+        BfExtLoopBegin,
+        BfExtDec 1,
+        BfExtMoveRight s,
+        BfExtInc 1,
+        BfExtMoveLeft s,
+        BfExtLoopEnd,
         BfExtMoveLeft 1,
         BfExtLoopBegin,
         BfExtDec 1,
-        BfExtMoveRight 1,
+        BfExtMoveRight s,
         BfExtInc 1,
-        BfExtMoveLeft 1,
-        BfExtLoopEnd,
-
-        -- < [ - > + < ]
-        BfExtMoveLeft 1,
+        BfExtMoveLeft s,
+        BfExtLoopEnd
+      ] ++
+      -- <s { >(k - 1) [ - >s + <s ] <(k - 1) }(k=1..s)
+      [ BfExtMoveLeft s ] ++
+      concatMap (\k -> [ 
+        BfExtMoveRight $ k - 1,
         BfExtLoopBegin,
         BfExtDec 1,
-        BfExtMoveRight 1,
+        BfExtMoveRight s,
         BfExtInc 1,
-        BfExtMoveLeft 1,
+        BfExtMoveLeft s,
         BfExtLoopEnd,
-
-        -- >2 + > -
-        BfExtMoveRight 2,
+        BfExtMoveLeft $ k - 1
+      ]) [1..s] ++
+      [ -- >(2*s) + > - ]
+        BfExtMoveRight $ 2 * s,
         BfExtInc 1,
         BfExtMoveRight 1,
         BfExtDec 1,
         BfExtLoopEnd
       ]
 
-    -- [ <3 [ - >4 + <4 ] >2 [ - < + > ] > [ - < + > ] < - ]
-    arrayBck :: [BrainfuckExt]
-    arrayBck =
-      [ -- [ <3 [ - >4 + <4 ]
-        BfExtLoopBegin,
-        BfExtMoveLeft 3,
+    -- [
+    --   {<k [ - <s + >s ] >k}(k=1..s)
+    --   [ - <s + >s ] <s
+    --   <2s { [ - >(2s + 2) + <(2s + 2) ] >){_=1..s}
+    --   >s -
+    -- ]
+    arrayBck :: Int -> [BrainfuckExt]
+    arrayBck s =
+      [ BfExtLoopBegin ] ++
+      -- {<k [ - <s + >s ] >k}(k=1..s)
+      concatMap (\k -> [
+        BfExtMoveLeft k,
         BfExtLoopBegin,
         BfExtDec 1,
-        BfExtMoveRight 4,
+        BfExtMoveLeft s,
         BfExtInc 1,
-        BfExtMoveLeft 4,
+        BfExtMoveRight s,
         BfExtLoopEnd,
-
-        -- >2 [ - < + > ]
-        BfExtMoveRight 2,
+        BfExtMoveRight k
+      ]) [1..s] ++
+      [ -- [ - <s + >s ] <s <2s
         BfExtLoopBegin,
         BfExtDec 1,
-        BfExtMoveLeft 1,
+        BfExtMoveLeft s,
         BfExtInc 1,
-        BfExtMoveRight 1,
+        BfExtMoveRight s,
         BfExtLoopEnd,
-
-        -- > [ - < + > ]
-        BfExtMoveRight 1,
+        BfExtMoveLeft $ 3*s
+      ] ++
+      -- { [ - >(2s + 2) + <(2s + 2) ] >){_=1..s}
+      concatMap (const [
         BfExtLoopBegin,
         BfExtDec 1,
-        BfExtMoveLeft 1,
+        BfExtMoveRight $ 2*s + 2,
         BfExtInc 1,
-        BfExtMoveRight 1,
-        BfExtLoopEnd,
-
-        -- < - ]
-        BfExtMoveLeft 1,
-        BfExtDec 1,
-        BfExtLoopEnd
-      ]
-
-    -- > [ - <3 + < + >4 ] <4 [ - >4 + <4 ] >2
-    arrayGet :: [BrainfuckExt]
-    arrayGet = 
-        [ BfExtMoveRight 1,
-          BfExtLoopBegin,
-          BfExtDec 1,
-          BfExtMoveLeft 3,
-          BfExtInc 1,
-          BfExtMoveLeft 1,
-          BfExtInc 1,
-          BfExtMoveRight 4,
-          BfExtLoopEnd,
-          BfExtMoveLeft 4,
-          BfExtLoopBegin,
-          BfExtDec 1,
-          BfExtMoveRight 4,
-          BfExtInc 1,
-          BfExtMoveLeft 4,
-          BfExtLoopEnd,
-          BfExtMoveRight 2
-        ]
-
-    -- > [ - ] <3 [ - >3 + <3 ] >
-    arraySet :: [BrainfuckExt]
-    arraySet =
-      [ BfExtMoveRight 1,
-        BfExtLoopBegin,
-        BfExtDec 1,
-        BfExtLoopEnd,
-        BfExtMoveLeft 3,
-        BfExtLoopBegin,
-        BfExtDec 1,
-        BfExtMoveRight 3,
-        BfExtInc 1,
-        BfExtMoveLeft 3,
+        BfExtMoveLeft $ 2*s + 2,
         BfExtLoopEnd,
         BfExtMoveRight 1
+      ]) [1..s] ++
+      [ -- >s - ]
+        BfExtMoveRight s,
+        BfExtDec 1,
+        BfExtLoopEnd
       ]
 
-    -- [ > [ - <3 + < + >4 ] >N [ - ] <N <3 [ - >3 >N + <N <3 ] >2 [ - > + < ] < [ - > + < ] > + > - ]
-    arrayCopyFwd :: InstCopyDir -> Int -> [BrainfuckExt]
-    arrayCopyFwd dir n =
-      [ -- [ > [ - <3 + < + >4 ]
-        BfExtLoopBegin,
+    -- {>k [ - <(k + 1 + s) >(k - 1) + <s + >s <(k - 1) >(s + 1 + k) ] <k}(k=1..s)
+    -- {<(1 + 2s) >(k - 1) [ - <(k - 1) >(2*s + 1 + k) + <(k + 1 + 2*s) >(k - 1) ] <(k - 1) >(2*s + 1)}(k=1..s)
+    -- <
+    arrayGet :: Int -> [BrainfuckExt]
+    arrayGet s = 
+        concatMap (\k -> [
+          BfExtMoveRight k,
+          BfExtLoopBegin,
+          BfExtDec 1,
+          BfExtMoveLeft $ k + 1 + s,
+          BfExtMoveRight $ k - 1,
+          BfExtInc 1,
+          BfExtMoveLeft s,
+          BfExtInc 1,
+          BfExtMoveRight s,
+          BfExtMoveLeft $ k - 1,
+          BfExtMoveRight $ s + 1 + k,
+          BfExtLoopEnd,
+          BfExtMoveLeft k
+        ]) [1..s] ++
+        concatMap (\k -> [
+          BfExtMoveLeft $ 1 + 2*s,
+          BfExtMoveRight $ k - 1,
+          BfExtLoopBegin,
+          BfExtDec 1,
+          BfExtMoveLeft $ k - 1,
+          BfExtMoveRight $ 2*s + 1 + k,
+          BfExtInc 1,
+          BfExtMoveLeft $ k + 1 + 2*s,
+          BfExtMoveRight $ k - 1,
+          BfExtLoopEnd,
+          BfExtMoveLeft $ k - 1,
+          BfExtMoveRight $ 2*s + 1
+        ]) [1..s] ++
+        [ BfExtMoveLeft 1 ]
+
+    -- {> [ - ]}(_=1..s) <(s + 2)
+    -- {[ - >(s + 2) + <(s + 2) ] <}(_=1..s)
+    -- >(s + 1)
+    arraySet :: Int -> [BrainfuckExt]
+    arraySet s =
+      concatMap (const [
         BfExtMoveRight 1,
         BfExtLoopBegin,
         BfExtDec 1,
-        BfExtMoveLeft 3,
+        BfExtLoopEnd
+      ]) [1..s] ++
+      [ BfExtMoveLeft $ s + 2 ] ++
+      concatMap (const [
+        BfExtLoopBegin,
+        BfExtDec 1,
+        BfExtMoveRight $ s + 2,
         BfExtInc 1,
-        BfExtMoveLeft 1,
-        BfExtInc 1,
-        BfExtMoveRight 4,
+        BfExtMoveLeft $ s + 2,
         BfExtLoopEnd,
+        BfExtMoveLeft 1
+      ]) [1..s] ++
+      [ BfExtMoveRight $ s + 1 ]
 
-        -- (>|<)N [ - ] (<|>)N <3 [ - >3 (>|<)N + (<|>)N <3 ]
-        case dir of 
+    -- [ 
+    --   > {[ - <(s + 2) + <s + >(2s + 2) ] >}(_=1..s) <(s + 1)
+    --   > (>|<)N {[ - ] >}(_=1..s) <s (<|>)N <
+    --   < {<k [ - >(k + 2) (>|<)N >(s - k) + <(s - k) (<|>)N <(2 + k) ] >k}(k=1..s) >
+    --   [ - >s + <s ] < [ - >s + <s ] >s + > -
+    -- ]
+    arrayCopyFwd :: InstCopyDir -> Int -> Int -> [BrainfuckExt]
+    arrayCopyFwd dir n s =
+      [ -- [ >
+        BfExtLoopBegin,
+        BfExtMoveRight 1
+      ] ++
+      -- {[ - <(s + 2) + <s + >(2s + 2) ] >}(_=1..s)
+      concatMap (const [ 
+        BfExtLoopBegin,
+        BfExtDec 1,
+        BfExtMoveLeft $ s + 2,
+        BfExtInc 1,
+        BfExtMoveLeft s,
+        BfExtInc 1,
+        BfExtMoveRight $ 2*s + 2,
+        BfExtLoopEnd,
+        BfExtMoveRight 1
+      ]) [1..s] ++
+      [ -- <(s + 1) > (>|<)N 
+        BfExtMoveLeft $ s + 1,
+        BfExtMoveRight 1,
+        case dir of
           DirRight -> BfExtMoveRight n
-          DirLeft -> BfExtMoveLeft n,
+          DirLeft -> BfExtMoveLeft n
+      ] ++
+      -- {[ - ] >}(_=1..s) 
+      concatMap (const [
         BfExtLoopBegin,
         BfExtDec 1,
         BfExtLoopEnd,
-        case dir of 
+        BfExtMoveRight 1
+      ]) [1..s] ++
+      [ -- <s (<|>)N < < 
+        BfExtMoveLeft s,
+        case dir of
           DirRight -> BfExtMoveLeft n
           DirLeft -> BfExtMoveRight n,
-        BfExtMoveLeft 3,
+        BfExtMoveLeft 2
+      ] ++
+      -- {<k [ - >(k + 2) (>|<)N >(s - k) + <(s - k)  + (<|>)N <(2 + k) ] >k}(k=1..s)
+      concatMap (\k -> [
+        BfExtMoveLeft k,
         BfExtLoopBegin,
         BfExtDec 1,
-        BfExtMoveRight 3,
-        case dir of 
+        BfExtMoveRight $ k + 2,
+        case dir of
           DirRight -> BfExtMoveRight n
           DirLeft -> BfExtMoveLeft n,
+        BfExtMoveRight $ s - k,
         BfExtInc 1,
-        case dir of 
+        BfExtMoveLeft $ s - k,
+        case dir of
           DirRight -> BfExtMoveLeft n
           DirLeft -> BfExtMoveRight n,
-        BfExtMoveLeft 3,
+        BfExtMoveLeft $ 2 + k,
         BfExtLoopEnd,
-         
-        -- >2 [ - > + < ]
-        BfExtMoveRight 2,
+        BfExtMoveRight k
+      ]) [1..s] ++
+      [ -- > [ - >s + <s ]
+        BfExtMoveRight 1,
         BfExtLoopBegin,
         BfExtDec 1,
-        BfExtMoveRight 1,
+        BfExtMoveRight s,
         BfExtInc 1,
-        BfExtMoveLeft 1,
+        BfExtMoveLeft s,
         BfExtLoopEnd,
 
-        -- < [ - > + < ]
+        -- < [ - >s + <s ]
         BfExtMoveLeft 1,
         BfExtLoopBegin,
         BfExtDec 1,
-        BfExtMoveRight 1,
+        BfExtMoveRight s,
         BfExtInc 1,
-        BfExtMoveLeft 1,
+        BfExtMoveLeft s,
         BfExtLoopEnd,
 
-        --  > + > - ]
-        BfExtMoveRight 1,
+        --  >s + > - ]
+        BfExtMoveRight s,
         BfExtInc 1,
         BfExtMoveRight 1,
         BfExtDec 1,
         BfExtLoopEnd
       ]
+
+    -- -- [ > [ - <3 + < + >4 ] >N [ - ] <N <3 [ - >3 >N + <N <3 ] >2 [ - > + < ] < [ - > + < ] > + > - ]
+    -- arrayCopyFwd :: InstCopyDir -> Int -> Int -> [BrainfuckExt]
+    -- arrayCopyFwd dir n s =
+    --   [ -- [ > [ - <3 + < + >4 ]
+    --     BfExtLoopBegin,
+    --     BfExtMoveRight 1,
+    --     BfExtLoopBegin,
+    --     BfExtDec 1,
+    --     BfExtMoveLeft 3,
+    --     BfExtInc 1,
+    --     BfExtMoveLeft 1,
+    --     BfExtInc 1,
+    --     BfExtMoveRight 4,
+    --     BfExtLoopEnd,
+    --
+    --     -- (>|<)N [ - ] (<|>)N <3 [ - >3 (>|<)N + (<|>)N <3 ]
+    --     case dir of 
+    --       DirRight -> BfExtMoveRight n
+    --       DirLeft -> BfExtMoveLeft n,
+    --     BfExtLoopBegin,
+    --     BfExtDec 1,
+    --     BfExtLoopEnd,
+    --     case dir of 
+    --       DirRight -> BfExtMoveLeft n
+    --       DirLeft -> BfExtMoveRight n,
+    --     BfExtMoveLeft 3,
+    --     BfExtLoopBegin,
+    --     BfExtDec 1,
+    --     BfExtMoveRight 3,
+    --     case dir of 
+    --       DirRight -> BfExtMoveRight n
+    --       DirLeft -> BfExtMoveLeft n,
+    --     BfExtInc 1,
+    --     case dir of 
+    --       DirRight -> BfExtMoveLeft n
+    --       DirLeft -> BfExtMoveRight n,
+    --     BfExtMoveLeft 3,
+    --     BfExtLoopEnd,
+    --      
+    --     -- >2 [ - > + < ]
+    --     BfExtMoveRight 2,
+    --     BfExtLoopBegin,
+    --     BfExtDec 1,
+    --     BfExtMoveRight 1,
+    --     BfExtInc 1,
+    --     BfExtMoveLeft 1,
+    --     BfExtLoopEnd,
+    --
+    --     -- < [ - > + < ]
+    --     BfExtMoveLeft 1,
+    --     BfExtLoopBegin,
+    --     BfExtDec 1,
+    --     BfExtMoveRight 1,
+    --     BfExtInc 1,
+    --     BfExtMoveLeft 1,
+    --     BfExtLoopEnd,
+    --
+    --     --  > + > - ]
+    --     BfExtMoveRight 1,
+    --     BfExtInc 1,
+    --     BfExtMoveRight 1,
+    --     BfExtDec 1,
+    --     BfExtLoopEnd
+    --   ]
 
     convert' :: UncheckedInst -> [BrainfuckExt]
     convert' (InstConst (Var i) n) =
@@ -344,41 +476,41 @@ convert = concatMap convert'
         BfExtMoveLeft i
       ]
     convert' (InstIntrinsic bf) = bf
-    convert' (InstArrGet (Var i)) =
+    convert' (InstArrGet (Var i) s) =
         [ -- >i >3
           BfExtMoveRight i,
-          BfExtMoveRight 3
+          BfExtMoveRight $ 2 * s + 1
         ] ++
-        arrayFwd ++ 
-        arrayGet ++ 
-        arrayBck ++ 
+        arrayFwd s ++ 
+        arrayGet s ++ 
+        arrayBck s ++ 
         [ -- <2 <i
-          BfExtMoveLeft 2,
+          BfExtMoveLeft $ 2 * s,
           BfExtMoveLeft i
         ]
-    convert' (InstArrSet (Var i)) =
+    convert' (InstArrSet (Var i) s) =
         [ -- >i >3
           BfExtMoveRight i,
-          BfExtMoveRight 3
+          BfExtMoveRight $ 2 * s + 1
         ] ++
-        arrayFwd ++
-        arraySet ++ 
-        arrayBck ++ 
+        arrayFwd s ++
+        arraySet s ++ 
+        arrayBck s ++ 
         [ -- <2 <i
-          BfExtMoveLeft 2,
+          BfExtMoveLeft $ 2 * s,
           BfExtMoveLeft i
         ]
-    convert' (InstArrCopy (Var i) (Var j)) =
+    convert' (InstArrCopy (Var i) (Var j) s) =
         let (dir, n) = if j > i then (DirRight, j - i) else (DirLeft, i - j) in
         [ -- >i >3
           BfExtMoveRight i,
-          BfExtMoveRight 3
+          BfExtMoveRight $ 2 * s + 1
         ] ++
-        arrayCopyFwd dir n ++ 
+        arrayCopyFwd dir n s ++ 
         [ BfExtMoveLeft 1 ] ++
-        arrayBck ++ 
+        arrayBck s ++ 
         [ -- <2 <i
-          BfExtMoveLeft 2,
+          BfExtMoveLeft $ 2 * s,
           BfExtMoveLeft i
         ]
 
@@ -406,8 +538,8 @@ progToString' = instsToString
         instToString (InstRead v) = write $ "read " ++ varToString v
         instToString (InstWrite v) = write $ "write " ++ varToString v
         instToString (InstIntrinsic bf) = write $ "intrinsic " ++ BE.progToString bf
-        instToString (InstArrGet v) = write $ "get " ++ varToString v
-        instToString (InstArrSet v) = write $ "set " ++ varToString v
-        instToString (InstArrCopy f t) = write $ varToString t ++ "[] = " ++ varToString f ++ "[]"
+        instToString (InstArrGet v s) = write $ "get{" ++ show s ++ "} " ++ varToString v
+        instToString (InstArrSet v s) = write $ "set{" ++ show s ++ "} " ++ varToString v
+        instToString (InstArrCopy f t s) = write $ varToString t ++ "{" ++ show s ++ "}" ++ "[] = " ++ varToString f ++ "[]"
 
         varToString (Var i) = "%" ++ show i
