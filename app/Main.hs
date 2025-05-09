@@ -28,7 +28,7 @@ example :: Program
 example =
   let sTy = TyStruct [("a", TyInt), ("b", TyArray TyInt 5), ("c", TyInt)] in
   Program
-    [ (Function "main" [] [])
+    [ (Function "main" [] TyVoid)
         [ StmtAssgn (RefVar $ Var "res") (ExprConst 42),
           StmtAllocate (Var "s") sTy,
           StmtAssgn (RefStructField (RefVar $ Var "s") "a") $ ExprConst 10,
@@ -38,10 +38,10 @@ example =
           StmtAssgn (RefStructField (RefVar $ Var "s") "c") $ ExprConst 121,
           StmtAssgn (RefVar $ Var "s") (ExprCall (Func "modify_struct") [ExprRef $ RefVar $ Var "s"])
         ],
-      (Function "modify_struct" [("s", sTy)] [sTy])
+      (Function "modify_struct" [("s", sTy)] sTy)
         [ StmtAssgn (RefArray (RefStructField (RefVar $ Var "s") "b") (ExprConst 2)) $ ExprConst 19,
           StmtAssgn (RefStructField (RefVar $ Var "s") "a") $ ExprConst 74,
-          StmtReturn [ExprRef $ RefVar $ Var "s"]
+          StmtReturn $ Just $ ExprRef $ RefVar $ Var "s"
         ]
     ]
 

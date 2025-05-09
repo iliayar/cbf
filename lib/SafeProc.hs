@@ -70,7 +70,7 @@ data Block = Block String [SafeProc]
 
 data Function = Function String [(String, Ty)] [Ty] [Block]
 
-data Ty = TyInt | TyArray Ty Int | TyStruct [(String, Ty)]
+data Ty = TyInt | TyArray Ty Int | TyStruct [(String, Ty)] | TyVoid
     deriving (Show, Eq)
 
 getArrayElemTy :: Ty -> Ty
@@ -88,6 +88,7 @@ sizeOfType :: Ty -> Int
 sizeOfType TyInt = 1
 sizeOfType (TyArray ty n) = UI.arraySize n $ sizeOfType ty
 sizeOfType (TyStruct fs) = foldl (\acc (_, ty) -> acc + sizeOfType ty) 0 fs
+sizeOfType TyVoid = 0
 
 isVarTy :: Ty -> Bool
 isVarTy TyInt = True
@@ -575,6 +576,7 @@ progToString prog = runWriter $ progToString' prog
     tyToString TyInt = "auto"
     tyToString (TyArray ty n) = tyToString ty ++ "[" ++ show n ++ "]"
     tyToString (TyStruct fs) = "struct { " ++ unwords (fmap (\(f, ty) -> tyToString ty ++ " " ++ f ++ ";") fs) ++ " }"
+    tyToString TyVoid = "void"
 
     argToString :: (String, Ty) -> String
     argToString (name, ty) = tyToString ty ++ " " ++ name

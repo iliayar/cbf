@@ -80,19 +80,19 @@ data Stmt
   = StmtAssgn Ref Expr
   | StmtIf Expr [Stmt] [Stmt]
   | StmtWhile Expr [Stmt]
-  | StmtCallAssgn [Var] Func [Expr]
-  | StmtReturn [Expr]
+  | StmtReturn (Maybe Expr)
   | StmtAllocate Var Ty
 
-data Function = Function String [(String, Ty)] [Ty] [Stmt]
+data Function = Function String [(String, Ty)] Ty [Stmt]
 
-data Ty = TyInt | TyArray Ty Int | TyStruct [(String, Ty)]
+data Ty = TyInt | TyArray Ty Int | TyStruct [(String, Ty)] | TyVoid
     deriving (Eq, Ord)
 
 convertTy :: Ty -> SP.Ty
 convertTy TyInt = SP.TyInt
 convertTy (TyArray ty n) = SP.TyArray (convertTy ty) n
 convertTy (TyStruct fs) = SP.TyStruct $ fmap (second convertTy) fs
+convertTy TyVoid = SP.TyVoid
 
 getArrayElemTy :: Ty -> Ty
 getArrayElemTy (TyArray ty _) = ty
@@ -111,7 +111,7 @@ data ConverterState = ConverterState
     cTmpVariablesCnt :: Int,
     cExprStack :: [SP.Ref],
     cTypeContext :: M.Map String Ty,
-    cFuncTys :: M.Map String ([Ty], [Ty]),
+    cFuncTys :: M.Map String ([Ty], Ty),
     cTmpVarTys :: M.Map SP.Var Ty
   }
 
@@ -214,6 +214,7 @@ removeFreeVar (SP.RefVar var) = do
         cFreeVariables = M.insert ty (S.delete var freeVars) cFreeVariables
     }
 removeFreeVar (SP.RefArrayValue ref) = removeFreeVar ref
+removeFreeVar (SP.RefStructField ref _) = removeFreeVar ref
 
 addFreeVar :: SP.Ref -> Converter ()
 addFreeVar (SP.RefVar var) = do
@@ -224,6 +225,7 @@ addFreeVar (SP.RefVar var) = do
         cFreeVariables = M.insert ty (S.insert var freeVars) cFreeVariables
     }
 addFreeVar (SP.RefArrayValue ref) = removeFreeVar ref
+addFreeVar (SP.RefStructField ref _) = removeFreeVar ref
 
 addVarTy' :: String -> Ty -> Converter ()
 addVarTy' name ty = do
@@ -262,18 +264,16 @@ deriveRefTy (RefStructField ref field) = do
     ty <- deriveRefTy ref
     return $ getStructFieldTy ty field
 
-addFuncTy :: String -> [Ty] -> [Ty] -> Converter ()
-addFuncTy name argTys retTys = do
+addFuncTy :: String -> [Ty] -> Ty -> Converter ()
+addFuncTy name argTys retTy = do
     st@(ConverterState { cFuncTys }) <- ST.get
-    ST.put $ st { cFuncTys = M.insert name (argTys, retTys) cFuncTys }
+    ST.put $ st { cFuncTys = M.insert name (argTys, retTy) cFuncTys }
 
 getSingleRetTy :: Func -> Converter Ty
 getSingleRetTy (Func name) = do
     ConverterState { cFuncTys } <- ST.get
-    let (_, retTys) = cFuncTys M.! name
-    case retTys of
-        [ret] -> return ret
-        _ -> error $ "Function " ++ name ++ " expected to have single ret type"
+    let (_, retTy) = cFuncTys M.! name
+    return retTy
 
 data PreparedRef = PreparedRef {
     ref :: SP.Ref,
@@ -287,11 +287,11 @@ convert (Program functions) =
     let funcTys = M.fromList $ fmap extractFuncTy functions in
     SP.Program $ fmap (convertFunction funcTys) functions
   where
-    extractFuncTy :: Function -> (String, ([Ty], [Ty]))
-    extractFuncTy (Function name args rets _) = (name, (fmap snd args, rets))
+    extractFuncTy :: Function -> (String, ([Ty], Ty))
+    extractFuncTy (Function name args ret _) = (name, (fmap snd args, ret))
 
-    convertFunction :: M.Map String ([Ty], [Ty]) -> Function -> SP.Function
-    convertFunction funcTys (Function name args rets stmts) =
+    convertFunction :: M.Map String ([Ty], Ty) -> Function -> SP.Function
+    convertFunction funcTys (Function name args ret stmts) =
       let (_, ConverterState {cCurrentBody}) =
             ST.runState (addArgs args >> convertFunction' stmts) $
               ConverterState
@@ -307,7 +307,11 @@ convert (Program functions) =
                   cTmpVarTys = M.empty
                 }
           args' = fmap (second convertTy) args
-       in SP.Function name args' (fmap convertTy rets) (reverse cCurrentBody)
+      in
+      let retTys = case ret of
+            TyVoid -> []
+            ty -> [convertTy ty]
+      in SP.Function name args' retTys (reverse cCurrentBody)
 
     addArgs :: [(String, Ty)] -> Converter ()
     addArgs args = forM_ args (uncurry addVarTy')
@@ -406,15 +410,11 @@ convert (Program functions) =
       finishBlock
 
       startBlock loopEnd
-    convertStmt (StmtCallAssgn retVars func args) = do
-      forM_ args convertExpr'
-      -- TODO: Need add these vars to type context
-      argVars <- replicateM (length args) popTmpVar
-      addInstructions [SProcCall (convertFunc func) (reverse argVars) (fmap (SP.RefVar . convertVar) retVars)]
-    convertStmt (StmtReturn rets) = do
-      forM_ rets convertExpr'
-      retVars <- replicateM (length rets) popTmpVar
-      addInstructions [SProcReturn (reverse retVars)]
+    convertStmt (StmtReturn (Just ret)) = do
+      retVar <- convertExpr ret
+      addInstructions [SProcReturn [retVar]]
+    convertStmt (StmtReturn Nothing) = do
+      addInstructions [SProcReturn []]
     convertStmt (StmtAllocate var ty) = do
         addVarTy var ty
         addInstructions [SProcAlloc (convertVar var) $ convertTy ty]
@@ -479,10 +479,11 @@ progToString prog = runWriter $ progToString' prog
     tyToString TyInt = "auto"
     tyToString (TyArray ty n) = tyToString ty ++ "[" ++ show n ++ "]"
     tyToString (TyStruct fs) = "struct { " ++ unwords (fmap (\(f, ty) -> tyToString ty ++ " " ++ f ++ ";") fs) ++ " }"
+    tyToString TyVoid = "void"
 
     functionToString :: Function -> ProgWriter ()
-    functionToString (Function name args rets stmts) = do
-      write $ "function " ++ name ++ "(" ++ intercalate ", " (fmap argToString args) ++ ") [" ++ concatMap tyToString rets ++ "] {"
+    functionToString (Function name args ret stmts) = do
+      write $ tyToString ret ++ " " ++ name ++ "(" ++ intercalate ", " (fmap argToString args) ++ ") {"
       withIndent $ nl >> stmtsToString stmts
       nl >> write "}"
 
@@ -508,14 +509,11 @@ progToString prog = runWriter $ progToString' prog
       write " != 0 {"
       withIndent $ nl >> stmtsToString body
       nl >> write "}"
-    stmtToString (StmtCallAssgn vs func args) = do
-      write $ intercalate ", " $ fmap varToString vs
-      write $ " = " ++ funcToString func ++ "("
-      forM_ (intersperse (write ", ") $ fmap exprToString args) id
-      write ")"
-    stmtToString (StmtReturn rets) = do
+    stmtToString (StmtReturn (Just ret)) = do
       write "return "
-      forM_ (intersperse (write ", ") $ fmap exprToString rets) id
+      exprToString ret
+    stmtToString (StmtReturn Nothing) = do
+      write "return"
     stmtToString (StmtAllocate var ty) = do
         write $ tyToString ty ++ " " ++ varToString var
 

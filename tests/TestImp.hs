@@ -28,41 +28,41 @@ re s = ExprRef $ RefVar $ Var s
 kub :: Int -> Program
 kub n =
   Program
-    [ (Function "main" [] [])
+    [ (Function "main" [] TyVoid)
         [ StmtAssgn (RefVar $ Var "res") (ExprCall (Func "kub") [ExprConst n])
         ],
-      (Function "mult" [("a", TyInt), ("b", TyInt)] [TyInt])
+      (Function "mult" [("a", TyInt), ("b", TyInt)] TyInt)
         [ StmtAssgn (RefVar $ Var "res") (ExprConst 0),
           StmtWhile (re "a") 
             [ StmtAssgn (RefVar $ Var "res") (ExprAdd (re "res") (re "b"))
             , StmtAssgn (RefVar $ Var "a") (ExprSub (re "a") (ExprConst 1))
             ],
-          StmtReturn [re "res"]
+          StmtReturn $ Just $ re "res"
         ],
-      (Function "kub" [("a", TyInt)] [TyInt])
-        [ StmtReturn [ExprCall (Func "mult") [re "a", ExprCall (Func "mult") [re "a", re "a"]]]
+      (Function "kub" [("a", TyInt)] TyInt)
+        [ StmtReturn $ Just $ ExprCall (Func "mult") [re "a", ExprCall (Func "mult") [re "a", re "a"]]
         ]
     ]
 
 fact :: Int -> Program
 fact n =
   Program
-    [ (Function "main" [] [])
+    [ (Function "main" [] TyVoid)
         [ StmtAssgn (RefVar $ Var "res") (ExprCall (Func "fact") [ExprConst n])
         ],
-      (Function "mult" [("a", TyInt), ("b", TyInt)] [TyInt])
+      (Function "mult" [("a", TyInt), ("b", TyInt)] TyInt)
         [ StmtAssgn (RefVar $ Var "res") (ExprConst 0),
           StmtWhile (re "a") 
             [ StmtAssgn (RefVar $ Var "res") (ExprAdd (re "res") (re "b"))
             , StmtAssgn (RefVar $ Var "a") (ExprSub (re "a") (ExprConst 1))
             ],
-          StmtReturn [re "res"]
+          StmtReturn $ Just $ re "res"
         ],
-      (Function "fact" [("a", TyInt)] [TyInt])
+      (Function "fact" [("a", TyInt)] TyInt)
         [ StmtIf (re "a")
-            [ StmtReturn [ExprCall (Func "mult") [re "a", ExprCall (Func "fact") [ExprSub (re "a") (ExprConst 1)]]]
+            [ StmtReturn $ Just $ ExprCall (Func "mult") [re "a", ExprCall (Func "fact") [ExprSub (re "a") (ExprConst 1)]]
             ]
-            [ StmtReturn [ExprConst 1]
+            [ StmtReturn $ Just $ ExprConst 1
             ]
         ]
     ]
@@ -83,29 +83,29 @@ sumArray :: [Int] -> Program
 sumArray ns =
   let inits = zipWith (\i v -> StmtAssgn (RefArray (RefVar $ Var "arr") (ExprConst i)) (ExprConst v)) [0..] ns in 
   Program
-    [ (Function "main" [] []) $
+    [ (Function "main" [] TyVoid) $
         [ StmtAssgn (RefVar $ Var "res") (ExprConst 0),
           StmtAllocate (Var "arr") $ TyArray TyInt $ length ns
         ] ++ inits ++
         [ StmtAssgn (RefVar $ Var "arr") (ExprCall (Func "inc_all") [re "arr"]),
           StmtAssgn (RefVar $ Var "res") (ExprCall (Func "sum") [re "arr"])
         ],
-      (Function "inc_all" [("arr", TyArray TyInt $ length ns)] [TyArray TyInt $ length ns])
+      (Function "inc_all" [("arr", TyArray TyInt $ length ns)] (TyArray TyInt $ length ns))
         [ StmtAssgn (RefVar $ Var "i") (ExprConst $ length ns),
           StmtWhile (re "i")
             [ StmtAssgn (RefVar $ Var "i") (ExprSub (re "i") (ExprConst 1)),
               StmtAssgn (RefArray (RefVar $ Var "arr") (re "i")) (ExprAdd (ExprRef (RefArray (RefVar $ Var "arr") (re "i"))) (ExprConst 1))
             ],
-          StmtReturn [re "arr"]
+          StmtReturn $ Just $ re "arr"
         ],
-      (Function "sum" [("arr", TyArray TyInt $ length ns)] [TyInt])
+      (Function "sum" [("arr", TyArray TyInt $ length ns)] TyInt)
         [ StmtAssgn (RefVar $ Var "i") (ExprConst $ length ns),
           StmtAssgn (RefVar $ Var "res") (ExprConst 0),
           StmtWhile (re "i")
             [ StmtAssgn (RefVar $ Var "i") (ExprSub (re "i") (ExprConst 1)),
               StmtAssgn (RefVar $ Var "res") (ExprAdd (re "res") (ExprRef (RefArray (RefVar $ Var "arr") (re "i"))))
             ],
-          StmtReturn [re "res"]
+          StmtReturn $ Just $ re "res"
         ]
     ]
 
@@ -121,7 +121,7 @@ structs :: Program
 structs =
   let sTy = TyStruct [("a", TyInt), ("b", TyArray TyInt 5), ("c", TyInt)] in
   Program
-    [ (Function "main" [] [])
+    [ (Function "main" [] TyVoid)
         [ StmtAssgn (RefVar $ Var "res") (ExprConst 42),
           StmtAllocate (Var "s") sTy,
           StmtAssgn (RefStructField (RefVar $ Var "s") "a") $ ExprConst 10,
@@ -131,10 +131,10 @@ structs =
           StmtAssgn (RefStructField (RefVar $ Var "s") "c") $ ExprConst 121,
           StmtAssgn (RefVar $ Var "s") (ExprCall (Func "modify_struct") [ExprRef $ RefVar $ Var "s"])
         ],
-      (Function "modify_struct" [("s", sTy)] [sTy])
+      (Function "modify_struct" [("s", sTy)] sTy)
         [ StmtAssgn (RefArray (RefStructField (RefVar $ Var "s") "b") (ExprConst 2)) $ ExprConst 19,
           StmtAssgn (RefStructField (RefVar $ Var "s") "a") $ ExprConst 74,
-          StmtReturn [ExprRef $ RefVar $ Var "s"]
+          StmtReturn $ Just $ ExprRef $ RefVar $ Var "s"
         ]
     ]
 
