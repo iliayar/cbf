@@ -134,6 +134,7 @@ convert = convertBlocks
         InstArrCopy (convertRef fr) (convertRef tr) se
       ]
     convert' (InsExtArrayGet ar ir s) =
+      fmap (\k -> InstConst (UI.arrayTargetVar' (convertRef ar) s k) 0) [0..s-1] ++
       [ InstConst (convertVar TmpA) 0,
         InstMoveAdd (convertRef ir) [convertVar TmpA, UI.arrayTargetIdxVar (convertRef ar) s],
         InstMoveAdd (convertVar TmpA) [convertRef ir],

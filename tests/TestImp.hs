@@ -22,22 +22,25 @@ evaluate program =
             SafeProc.convert $
               Imp.convert program
 
+re :: String -> Expr
+re s = ExprRef $ RefVar $ Var s
+
 kub :: Int -> Program
 kub n =
   Program
     [ (Function "main" [] [])
-        [ StmtAssgn (Var "res") (ExprCall (Func "kub") [ExprConst n])
+        [ StmtAssgn (RefVar $ Var "res") (ExprCall (Func "kub") [ExprConst n])
         ],
       (Function "mult" [("a", TyInt), ("b", TyInt)] [TyInt])
-        [ StmtAssgn (Var "res") (ExprConst 0),
-          StmtWhile (ExprVar (Var "a")) 
-            [ StmtAssgn (Var "res") (ExprAdd (ExprVar (Var "res")) (ExprVar (Var "b")))
-            , StmtAssgn (Var "a") (ExprSub (ExprVar (Var "a")) (ExprConst 1))
+        [ StmtAssgn (RefVar $ Var "res") (ExprConst 0),
+          StmtWhile (re "a") 
+            [ StmtAssgn (RefVar $ Var "res") (ExprAdd (re "res") (re "b"))
+            , StmtAssgn (RefVar $ Var "a") (ExprSub (re "a") (ExprConst 1))
             ],
-          StmtReturn [ExprVar (Var "res")]
+          StmtReturn [re "res"]
         ],
       (Function "kub" [("a", TyInt)] [TyInt])
-        [ StmtReturn [ExprCall (Func "mult") [ExprVar (Var "a"), ExprCall (Func "mult") [ExprVar (Var "a"), ExprVar (Var "a")]]]
+        [ StmtReturn [ExprCall (Func "mult") [re "a", ExprCall (Func "mult") [re "a", re "a"]]]
         ]
     ]
 
@@ -45,19 +48,19 @@ fact :: Int -> Program
 fact n =
   Program
     [ (Function "main" [] [])
-        [ StmtAssgn (Var "res") (ExprCall (Func "fact") [ExprConst n])
+        [ StmtAssgn (RefVar $ Var "res") (ExprCall (Func "fact") [ExprConst n])
         ],
       (Function "mult" [("a", TyInt), ("b", TyInt)] [TyInt])
-        [ StmtAssgn (Var "res") (ExprConst 0),
-          StmtWhile (ExprVar (Var "a")) 
-            [ StmtAssgn (Var "res") (ExprAdd (ExprVar (Var "res")) (ExprVar (Var "b")))
-            , StmtAssgn (Var "a") (ExprSub (ExprVar (Var "a")) (ExprConst 1))
+        [ StmtAssgn (RefVar $ Var "res") (ExprConst 0),
+          StmtWhile (re "a") 
+            [ StmtAssgn (RefVar $ Var "res") (ExprAdd (re "res") (re "b"))
+            , StmtAssgn (RefVar $ Var "a") (ExprSub (re "a") (ExprConst 1))
             ],
-          StmtReturn [ExprVar (Var "res")]
+          StmtReturn [re "res"]
         ],
       (Function "fact" [("a", TyInt)] [TyInt])
-        [ StmtIf (ExprVar (Var "a"))
-            [ StmtReturn [ExprCall (Func "mult") [ExprVar (Var "a"), ExprCall (Func "fact") [ExprSub (ExprVar (Var "a")) (ExprConst 1)]]]
+        [ StmtIf (re "a")
+            [ StmtReturn [ExprCall (Func "mult") [re "a", ExprCall (Func "fact") [ExprSub (re "a") (ExprConst 1)]]]
             ]
             [ StmtReturn [ExprConst 1]
             ]
@@ -78,31 +81,31 @@ testFact n res = TestCase $ do
 
 sumArray :: [Int] -> Program
 sumArray ns =
-  let inits = zipWith (\i v -> StmtAssgnArray (Var "arr") (ExprConst i) (ExprConst v)) [0..] ns in 
+  let inits = zipWith (\i v -> StmtAssgn (RefArray (RefVar $ Var "arr") (ExprConst i)) (ExprConst v)) [0..] ns in 
   Program
     [ (Function "main" [] []) $
-        [ StmtAssgn (Var "res") (ExprConst 0),
+        [ StmtAssgn (RefVar $ Var "res") (ExprConst 0),
           StmtAllocate (Var "arr") $ TyArray TyInt $ length ns
         ] ++ inits ++
-        [ StmtAssgn (Var "arr") (ExprCall (Func "inc_all") [ExprVar $ Var "arr"]),
-          StmtAssgn (Var "res") (ExprCall (Func "sum") [ExprVar $ Var "arr"])
+        [ StmtAssgn (RefVar $ Var "arr") (ExprCall (Func "inc_all") [re "arr"]),
+          StmtAssgn (RefVar $ Var "res") (ExprCall (Func "sum") [re "arr"])
         ],
       (Function "inc_all" [("arr", TyArray TyInt $ length ns)] [TyArray TyInt $ length ns])
-        [ StmtAssgn (Var "i") (ExprConst $ length ns),
-          StmtWhile (ExprVar $ Var "i")
-            [ StmtAssgn (Var "i") (ExprSub (ExprVar $ Var "i") (ExprConst 1)),
-              StmtAssgnArray (Var "arr") (ExprVar $ Var "i") (ExprAdd (ExprArrayGet (Var "arr") (ExprVar $ Var "i")) (ExprConst 1))
+        [ StmtAssgn (RefVar $ Var "i") (ExprConst $ length ns),
+          StmtWhile (re "i")
+            [ StmtAssgn (RefVar $ Var "i") (ExprSub (re "i") (ExprConst 1)),
+              StmtAssgn (RefArray (RefVar $ Var "arr") (re "i")) (ExprAdd (ExprRef (RefArray (RefVar $ Var "arr") (re "i"))) (ExprConst 1))
             ],
-          StmtReturn [ExprVar $ Var "arr"]
+          StmtReturn [re "arr"]
         ],
       (Function "sum" [("arr", TyArray TyInt $ length ns)] [TyInt])
-        [ StmtAssgn (Var "i") (ExprConst $ length ns),
-          StmtAssgn (Var "res") (ExprConst 0),
-          StmtWhile (ExprVar $ Var "i")
-            [ StmtAssgn (Var "i") (ExprSub (ExprVar $ Var "i") (ExprConst 1)),
-              StmtAssgn (Var "res") (ExprAdd (ExprVar $ Var "res") (ExprArrayGet (Var "arr") (ExprVar $ Var "i")))
+        [ StmtAssgn (RefVar $ Var "i") (ExprConst $ length ns),
+          StmtAssgn (RefVar $ Var "res") (ExprConst 0),
+          StmtWhile (re "i")
+            [ StmtAssgn (RefVar $ Var "i") (ExprSub (re "i") (ExprConst 1)),
+              StmtAssgn (RefVar $ Var "res") (ExprAdd (re "res") (ExprRef (RefArray (RefVar $ Var "arr") (re "i"))))
             ],
-          StmtReturn [ExprVar $ Var "res"]
+          StmtReturn [re "res"]
         ]
     ]
 

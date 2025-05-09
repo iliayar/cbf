@@ -70,21 +70,19 @@ newtype Var = Var String
 newtype Func = Func String
 
 data Expr
-  = ExprVar Var
+  = ExprRef Ref
   | ExprConst Int
   | ExprAdd Expr Expr
   | ExprSub Expr Expr
   | ExprCall Func [Expr]
-  | ExprArrayGet Var Expr
 
 data Stmt
-  = StmtAssgn Var Expr
+  = StmtAssgn Ref Expr
   | StmtIf Expr [Stmt] [Stmt]
   | StmtWhile Expr [Stmt]
   | StmtCallAssgn [Var] Func [Expr]
   | StmtReturn [Expr]
   | StmtAllocate Var Ty
-  | StmtAssgnArray Var Expr Expr
 
 data Function = Function String [(String, Ty)] [Ty] [Stmt]
 
@@ -95,6 +93,12 @@ convertTy :: Ty -> SP.Ty
 convertTy TyInt = SP.TyInt
 convertTy (TyArray ty n) = SP.TyArray (convertTy ty) n
 convertTy (TyStruct fs) = SP.TyStruct $ fmap (second convertTy) fs
+
+getArrayElemTy :: Ty -> Ty
+getArrayElemTy (TyArray ty _) = ty
+getArrayElemTy _ = undefined
+
+data Ref = RefVar Var | RefArray Ref Expr
 
 newtype Program = Program [Function]
 
@@ -197,6 +201,7 @@ pushTmpVar ref = do
     ST.put $ st {
         cExprStack = ref : cExprStack
     }
+    removeFreeVar ref
 
 removeFreeVar :: SP.Ref -> Converter ()
 removeFreeVar (SP.RefVar var) = do
@@ -226,19 +231,22 @@ addVarTy' name ty = do
 addVarTy :: Var -> Ty -> Converter ()
 addVarTy (Var name) = addVarTy' name
 
--- getVarTy :: String ->  Converter Ty
--- getVarTy name = do
---     ConverterState { cTypeContext } <- ST.get
---     return $ cTypeContext M.! name
-
-getVarTyOrSet :: Var -> Ty ->  Converter Ty
-getVarTyOrSet (Var name) ty = do
+setNewVarTy :: Ref -> Ty -> Converter ()
+setNewVarTy (RefVar (Var name)) ty = do
     st@(ConverterState { cTypeContext }) <- ST.get
     case M.lookup name cTypeContext of
-        Just ty' -> return ty'
+        Just _ -> return ()
         Nothing -> do
             ST.put $ st { cTypeContext = M.insert name ty cTypeContext }
-            return ty
+setNewVarTy _ _ = return ()
+
+deriveRefTy :: Ref -> Converter Ty
+deriveRefTy (RefVar (Var name)) = do
+    ConverterState { cTypeContext } <- ST.get
+    return $ cTypeContext M.! name
+deriveRefTy (RefArray ref _) = do
+    ty <- deriveRefTy ref
+    return $ getArrayElemTy ty
 
 addFuncTy :: String -> [Ty] -> [Ty] -> Converter ()
 addFuncTy name argTys retTys = do
@@ -252,6 +260,13 @@ getSingleRetTy (Func name) = do
     case retTys of
         [ret] -> return ret
         _ -> error $ "Function " ++ name ++ " expected to have single ret type"
+
+data PreparedRef = PreparedRef {
+    ref :: SP.Ref,
+    focus :: Converter (),
+    save :: Converter (),
+    discard :: Converter ()
+}
 
 convert :: Program -> SP.Program
 convert (Program functions) =
@@ -293,11 +308,44 @@ convert (Program functions) =
     convertStmts :: [Stmt] -> Converter ()
     convertStmts stmts = forM_ stmts convertStmt
 
+    prepRef :: Ref -> Converter PreparedRef
+    prepRef (RefVar var) = do
+        return $ PreparedRef {
+            ref = SP.RefVar $ convertVar var,
+            focus = return (),
+            save = return (),
+            discard = return ()
+        }
+    prepRef (RefArray ref' idxExpr) = do
+        PreparedRef { ref, focus, save, discard } <- prepRef ref'
+        idx <- convertExpr idxExpr
+        pushTmpVar idx
+        return $ PreparedRef {
+            ref = SP.RefArrayValue ref,
+            focus = do
+                focus
+                addInstructions [ SProcArrayGet ref idx ],
+            save = do
+                addInstructions [ SProcArraySet ref idx ]
+                _ <- popTmpVar
+                save,
+            discard = do
+                _ <- popTmpVar
+                discard
+        }
+
+
     convertStmt :: Stmt -> Converter ()
-    convertStmt (StmtAssgn v expr) = do
-      tmp <- convertExpr expr
-      -- addVarTy v ty
-      addInstructions [ SProcAssign (SP.RefVar $ convertVar v) tmp ]
+    convertStmt (StmtAssgn ref' expr) = do
+      convertExpr' expr
+      tmp <- popTmpVar
+      pushTmpVar tmp
+      PreparedRef { ref, focus, save } <- prepRef ref'
+      focus
+      addInstructions [ SProcAssign ref tmp ]
+      save
+      _ <- popTmpVar
+      return ()
     convertStmt (StmtIf e thenStmts elseStmts) = do
       thenBlock <- allocateBlock' "thenBranch"
       elseBlock <- allocateBlock' "elseBranch"
@@ -348,11 +396,6 @@ convert (Program functions) =
     convertStmt (StmtAllocate var ty) = do
         addVarTy var ty
         addInstructions [SProcAlloc (convertVar var) $ convertTy ty]
-    convertStmt (StmtAssgnArray var idxExpr expr) = do
-      value <- convertExpr expr
-      addInstructions [ SProcAssign (SP.RefArrayValue $ SP.RefVar $ convertVar var) value ]
-      idx <- convertExpr idxExpr
-      addInstructions [ SProcArraySet (SP.RefVar $ convertVar var) idx ]
 
     convertExpr :: Expr -> Converter SP.Ref
     convertExpr expr = do
@@ -360,10 +403,15 @@ convert (Program functions) =
       popTmpVar
 
     convertExpr' :: Expr -> Converter ()
-    convertExpr' (ExprVar v) = do
-      ty <- getVarTyOrSet v TyInt
+    convertExpr' (ExprRef ref') = do
+      setNewVarTy ref' TyInt
+      ty <- deriveRefTy ref'
       tmp <- acquireTmpVar ty
-      addInstructions [ SProcAssign tmp (SP.RefVar $ convertVar v) ]
+
+      PreparedRef { ref, focus, discard } <- prepRef ref'
+      focus
+      addInstructions [ SProcAssign tmp ref ]
+      discard
     convertExpr' (ExprConst n) = do
       tmp <- acquireTmpVar TyInt
       addInstructions [SProcConst tmp n]
@@ -388,15 +436,6 @@ convert (Program functions) =
         tmp <- acquireTmpVar ty
         addInstructions
           [ SProcCall (convertFunc func) (reverse vars) [tmp] ]
-    convertExpr' (ExprArrayGet var idxExpr) = do
-        convertExpr' idxExpr
-        idx <- popTmpVar
-        addInstructions
-          [ SProcConst (SP.RefArrayValue $ SP.RefVar $ convertVar var) 0,
-            SProcArrayGet (SP.RefVar $ convertVar var) idx
-          ]
-        tmp <- acquireTmpVar TyInt
-        addInstructions [ SProcAssign tmp (SP.RefArrayValue $ SP.RefVar $ convertVar var) ]
 
     convertVar :: Var -> SP.Var
     convertVar (Var v) = SP.Var v
@@ -429,8 +468,9 @@ progToString prog = runWriter $ progToString' prog
     stmtsToString stmts = forM_ (intersperse nl $ fmap stmtToString stmts) id
 
     stmtToString :: Stmt -> ProgWriter ()
-    stmtToString (StmtAssgn v e) = do
-      write $ varToString v ++ " = "
+    stmtToString (StmtAssgn ref e) = do
+      refToString ref
+      write " = "
       exprToString e
     stmtToString (StmtIf e thenStmts elseStmts) = do
       write "if "
@@ -456,11 +496,6 @@ progToString prog = runWriter $ progToString' prog
       forM_ (intersperse (write ", ") $ fmap exprToString rets) id
     stmtToString (StmtAllocate var ty) = do
         write $ tyToString ty ++ " " ++ varToString var
-    stmtToString (StmtAssgnArray arrVar idxExpr expr) = do
-        write $ varToString arrVar ++ "["
-        exprToString idxExpr
-        write "] = "
-        exprToString expr
 
     varToString :: Var -> String
     varToString (Var name) = name
@@ -468,8 +503,16 @@ progToString prog = runWriter $ progToString' prog
     funcToString :: Func -> String
     funcToString (Func name) = name
 
+    refToString :: Ref -> ProgWriter ()
+    refToString (RefVar v) = write $ varToString v
+    refToString (RefArray ref idx) = do
+        refToString ref
+        write "["
+        exprToString idx
+        write "]"
+
     exprToString :: Expr -> ProgWriter ()
-    exprToString (ExprVar v) = write $ varToString v
+    exprToString (ExprRef ref) = refToString ref
     exprToString (ExprConst n) = write $ show n
     exprToString (ExprAdd l r) = do
       exprToString l
@@ -483,7 +526,3 @@ progToString prog = runWriter $ progToString' prog
       write $ funcToString func ++ "("
       forM_ (intersperse (write ", ") $ fmap exprToString args) id
       write ")"
-    exprToString (ExprArrayGet arrVar idxExpr) = do
-        write $ varToString arrVar ++ "["
-        exprToString idxExpr
-        write "]"
