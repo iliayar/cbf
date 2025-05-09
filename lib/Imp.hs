@@ -88,12 +88,13 @@ data Stmt
 
 data Function = Function String [(String, Ty)] [Ty] [Stmt]
 
-data Ty = TyInt | TyArray Ty Int
+data Ty = TyInt | TyArray Ty Int | TyStruct [(String, Ty)]
     deriving (Eq, Ord)
 
 convertTy :: Ty -> SP.Ty
 convertTy TyInt = SP.TyInt
 convertTy (TyArray ty n) = SP.TyArray (convertTy ty) n
+convertTy (TyStruct fs) = SP.TyStruct $ fmap (second convertTy) fs
 
 newtype Program = Program [Function]
 
@@ -104,9 +105,10 @@ data ConverterState = ConverterState
     cCurrentBlock :: [SafeProc],
     cFreeVariables :: M.Map Ty (S.Set SP.Var),
     cTmpVariablesCnt :: Int,
-    cExprStack :: [(SP.Var, Ty)],
+    cExprStack :: [SP.Ref],
     cTypeContext :: M.Map String Ty,
-    cFuncTys :: M.Map String ([Ty], [Ty])
+    cFuncTys :: M.Map String ([Ty], [Ty]),
+    cTmpVarTys :: M.Map SP.Var Ty
   }
 
 type Converter = ST.State ConverterState
@@ -152,49 +154,69 @@ maybeAllocArray var ty@(TyArray _ _) = do
     addInstructions [ SProcAlloc var $ convertTy ty ]
 maybeAllocArray _ _ = return ()
 
+getTmpVarTy :: SP.Var -> Converter Ty
+getTmpVarTy var = do
+    ConverterState { cTmpVarTys } <- ST.get
+    return $ cTmpVarTys M.! var
 
-acquireTmpVar :: Ty -> Converter SP.Var
+acquireTmpVar :: Ty -> Converter SP.Ref
 acquireTmpVar ty = do
     initFreeForTy ty
-    st@(ConverterState { cFreeVariables, cTmpVariablesCnt, cExprStack }) <- ST.get
+    st@(ConverterState { cFreeVariables, cTmpVariablesCnt, cExprStack, cTmpVarTys }) <- ST.get
     let freeVars = cFreeVariables M.! ty
     case S.lookupMin freeVars of
         Just var ->  do
-            ST.put $ st { 
-                cExprStack = (var, ty) : cExprStack,
+            ST.put $ st {
+                cExprStack = SP.RefVar var : cExprStack,
                 cFreeVariables = M.insert ty (S.delete var freeVars) cFreeVariables
             }
-            return var
+            return $ SP.RefVar var
         Nothing -> do
             let var = SP.Var $ "$" ++ show cTmpVariablesCnt
-            ST.put $ st { cTmpVariablesCnt = cTmpVariablesCnt + 1, cExprStack = (var, ty) : cExprStack }
+            ST.put $ st {
+                cTmpVariablesCnt = cTmpVariablesCnt + 1,
+                cExprStack = SP.RefVar var : cExprStack,
+                cTmpVarTys = M.insert var ty cTmpVarTys
+            }
             maybeAllocArray var ty
-            return var
+            return $ SP.RefVar var
 
-popTmpVarWithTy :: Converter (SP.Var, Ty)
-popTmpVarWithTy = do
-    st@(ConverterState { cFreeVariables, cExprStack }) <- ST.get
+popTmpVar :: Converter SP.Ref
+popTmpVar = do
+    st@(ConverterState { cExprStack }) <- ST.get
     case cExprStack of
         [] -> error "Trying to pop from empty stack"
-        (var, ty) : stack' -> do
-            let freeVars = cFreeVariables M.! ty
-            ST.put $ st {
-                cFreeVariables = M.insert ty (S.insert var freeVars) cFreeVariables,
-                cExprStack = stack'
-            }
-            return (var, ty)
+        (ref : stack') -> do
+            ST.put $ st { cExprStack = stack' }
+            addFreeVar ref
+            return ref
 
-popTmpVar :: Converter SP.Var
-popTmpVar = fst <$> popTmpVarWithTy
-
-pushTmpVar :: (SP.Var, Ty) -> Converter ()
-pushTmpVar (var, ty) = do
-    st@(ConverterState { cFreeVariables, cExprStack }) <- ST.get
-    let freeVars = cFreeVariables M.! ty
-    ST.put $ st { 
-        cFreeVariables = M.insert ty (S.delete var freeVars) cFreeVariables,
-        cExprStack = (var, ty) : cExprStack
+pushTmpVar :: SP.Ref -> Converter ()
+pushTmpVar ref = do
+    st@(ConverterState { cExprStack }) <- ST.get
+    ST.put $ st {
+        cExprStack = ref : cExprStack
     }
+
+removeFreeVar :: SP.Ref -> Converter ()
+removeFreeVar (SP.RefVar var) = do
+    ty <- getTmpVarTy var
+    st@(ConverterState { cFreeVariables }) <- ST.get
+    let freeVars = cFreeVariables M.! ty
+    ST.put $ st {
+        cFreeVariables = M.insert ty (S.delete var freeVars) cFreeVariables
+    }
+removeFreeVar (SP.RefArrayValue ref) = removeFreeVar ref
+
+addFreeVar :: SP.Ref -> Converter ()
+addFreeVar (SP.RefVar var) = do
+    ty <- getTmpVarTy var
+    st@(ConverterState { cFreeVariables }) <- ST.get
+    let freeVars = cFreeVariables M.! ty
+    ST.put $ st {
+        cFreeVariables = M.insert ty (S.insert var freeVars) cFreeVariables
+    }
+addFreeVar (SP.RefArrayValue ref) = removeFreeVar ref
 
 addVarTy' :: String -> Ty -> Converter ()
 addVarTy' name ty = do
@@ -232,7 +254,7 @@ getSingleRetTy (Func name) = do
         _ -> error $ "Function " ++ name ++ " expected to have single ret type"
 
 convert :: Program -> SP.Program
-convert (Program functions) = 
+convert (Program functions) =
     let funcTys = M.fromList $ fmap extractFuncTy functions in
     SP.Program $ fmap (convertFunction funcTys) functions
   where
@@ -252,7 +274,8 @@ convert (Program functions) =
                   cFreeVariables = M.empty,
                   cTmpVariablesCnt = 0,
                   cTypeContext = M.empty,
-                  cFuncTys = funcTys
+                  cFuncTys = funcTys,
+                  cTmpVarTys = M.empty
                 }
           args' = fmap (second convertTy) args
        in SP.Function name args' (fmap convertTy rets) (reverse cCurrentBody)
@@ -272,14 +295,14 @@ convert (Program functions) =
 
     convertStmt :: Stmt -> Converter ()
     convertStmt (StmtAssgn v expr) = do
-      (tmp, ty) <- convertExpr expr
-      addVarTy v ty
-      addInstructions [ SProcAssign (convertVar v) tmp ]
+      tmp <- convertExpr expr
+      -- addVarTy v ty
+      addInstructions [ SProcAssign (SP.RefVar $ convertVar v) tmp ]
     convertStmt (StmtIf e thenStmts elseStmts) = do
       thenBlock <- allocateBlock' "thenBranch"
       elseBlock <- allocateBlock' "elseBranch"
       endBlock <- allocateBlock' "ifEnd"
-      (tmp, _) <- convertExpr e
+      tmp <- convertExpr e
       addInstructions
         [SProcBranch tmp (SP.Lbl thenBlock) (SP.Lbl elseBlock)]
       finishBlock
@@ -303,7 +326,7 @@ convert (Program functions) =
       finishBlock
 
       startBlock loopCond
-      (tmp, _) <- convertExpr e
+      tmp <- convertExpr e
       addInstructions [SProcBranch tmp (SP.Lbl loopBody) (SP.Lbl loopEnd)]
       finishBlock
 
@@ -317,7 +340,7 @@ convert (Program functions) =
       forM_ args convertExpr'
       -- TODO: Need add these vars to type context
       argVars <- replicateM (length args) popTmpVar
-      addInstructions [SProcCall (convertFunc func) (reverse argVars) (fmap convertVar retVars)]
+      addInstructions [SProcCall (convertFunc func) (reverse argVars) (fmap (SP.RefVar . convertVar) retVars)]
     convertStmt (StmtReturn rets) = do
       forM_ rets convertExpr'
       retVars <- replicateM (length rets) popTmpVar
@@ -325,22 +348,22 @@ convert (Program functions) =
     convertStmt (StmtAllocate var ty) = do
         addVarTy var ty
         addInstructions [SProcAlloc (convertVar var) $ convertTy ty]
-    convertStmt (StmtAssgnArray (Var name) idxExpr expr) = do
-      (value, _) <- convertExpr expr
-      addInstructions [ SProcAssign (SP.ArrayTargetVar name) value ]
-      (idx, _) <- convertExpr idxExpr
-      addInstructions [ SProcArraySet (SP.Var name) idx ]
+    convertStmt (StmtAssgnArray var idxExpr expr) = do
+      value <- convertExpr expr
+      addInstructions [ SProcAssign (SP.RefArrayValue $ SP.RefVar $ convertVar var) value ]
+      idx <- convertExpr idxExpr
+      addInstructions [ SProcArraySet (SP.RefVar $ convertVar var) idx ]
 
-    convertExpr :: Expr -> Converter (SP.Var, Ty)
+    convertExpr :: Expr -> Converter SP.Ref
     convertExpr expr = do
       convertExpr' expr
-      popTmpVarWithTy
+      popTmpVar
 
     convertExpr' :: Expr -> Converter ()
     convertExpr' (ExprVar v) = do
       ty <- getVarTyOrSet v TyInt
       tmp <- acquireTmpVar ty
-      addInstructions [ SProcAssign tmp (convertVar v) ]
+      addInstructions [ SProcAssign tmp (SP.RefVar $ convertVar v) ]
     convertExpr' (ExprConst n) = do
       tmp <- acquireTmpVar TyInt
       addInstructions [SProcConst tmp n]
@@ -348,16 +371,16 @@ convert (Program functions) =
       convertExpr' l
       convertExpr' r
       rVar <- popTmpVar
-      (lVar, ty) <- popTmpVarWithTy
+      lVar <- popTmpVar
       addInstructions [SProcCopyAdd rVar [lVar]]
-      pushTmpVar (lVar, ty)
+      pushTmpVar lVar
     convertExpr' (ExprSub l r) = do
       convertExpr' l
       convertExpr' r
       rVar <- popTmpVar
-      (lVar, ty) <- popTmpVarWithTy
+      lVar <- popTmpVar
       addInstructions [SProcCopySub rVar [lVar]]
-      pushTmpVar (lVar, ty)
+      pushTmpVar lVar
     convertExpr' (ExprCall func args) = do
         forM_ args convertExpr'
         vars <- replicateM (length args) popTmpVar
@@ -365,15 +388,15 @@ convert (Program functions) =
         tmp <- acquireTmpVar ty
         addInstructions
           [ SProcCall (convertFunc func) (reverse vars) [tmp] ]
-    convertExpr' (ExprArrayGet (Var name) idxExpr) = do
+    convertExpr' (ExprArrayGet var idxExpr) = do
         convertExpr' idxExpr
         idx <- popTmpVar
         addInstructions
-          [ SProcConst (SP.ArrayTargetVar name) 0,
-            SProcArrayGet (SP.Var name) idx
+          [ SProcConst (SP.RefArrayValue $ SP.RefVar $ convertVar var) 0,
+            SProcArrayGet (SP.RefVar $ convertVar var) idx
           ]
         tmp <- acquireTmpVar TyInt
-        addInstructions [ SProcAssign tmp (SP.ArrayTargetVar name) ]
+        addInstructions [ SProcAssign tmp (SP.RefArrayValue $ SP.RefVar $ convertVar var) ]
 
     convertVar :: Var -> SP.Var
     convertVar (Var v) = SP.Var v
@@ -394,6 +417,7 @@ progToString prog = runWriter $ progToString' prog
     tyToString :: Ty -> String
     tyToString TyInt = "auto"
     tyToString (TyArray ty n) = tyToString ty ++ "[" ++ show n ++ "]"
+    tyToString (TyStruct fs) = "struct { " ++ concatMap (\(f, ty) -> tyToString ty ++ " " ++ f ++ ";") fs ++ " }"
 
     functionToString :: Function -> ProgWriter ()
     functionToString (Function name args rets stmts) = do

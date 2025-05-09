@@ -6,7 +6,7 @@ import Test.HUnit
 import qualified UncheckedInsts
 import qualified UncheckedInstsExt
 import UncheckedProc (Func (..), Lbl (..), UncheckedProc (..), Var (..))
-import qualified UncheckedProc
+import qualified UncheckedProc as UP
 
 evaluate :: [[[UncheckedProc]]] -> IO [Int]
 evaluate program =
@@ -14,25 +14,28 @@ evaluate program =
     BasicExt.convert $
       UncheckedInsts.convert $
         UncheckedInstsExt.convert $
-          UncheckedProc.convert program
+          UP.convert program
+
+rv :: Int -> UP.Ref
+rv s = UP.RefVar $ UP.Var s
 
 mult :: Int -> Int -> [[[UncheckedProc]]]
 mult n m =
   [ -- func 0
     [ -- #0:
-      [ ProcConst (Var 0) n,
-        ProcConst (Var 1) m,
-        ProcConst (Var 2) 1,
-        ProcConst (Var 3) 0,
+      [ ProcConst (rv 0) n,
+        ProcConst (rv 1) m,
+        ProcConst (rv 2) 1,
+        ProcConst (rv 3) 0,
         ProcGoto (Lbl 1),
         ProcGoto (Lbl 0) -- NOTE: Never called
       ],
       -- #1:
-      [ ProcBranch (Var 0) (Lbl 2) Ret
+      [ ProcBranch (rv 0) (Lbl 2) Ret
       ],
       -- #2:
-      [ ProcCopyAdd (Var 1) [Var 3],
-        ProcCopySub (Var 2) [Var 0],
+      [ ProcCopyAdd (rv 1) [rv 3],
+        ProcCopySub (rv 2) [rv 0],
         ProcGoto (Lbl 1)
       ]
     ]
@@ -48,11 +51,11 @@ pow :: Int -> Int -> [[[UncheckedProc]]]
 pow n m =
   [ -- func 0
     [ -- #0:
-      [ ProcConst (Var 10) n,
-        ProcConst (Var 11) m,
+      [ ProcConst (rv 10) n,
+        ProcConst (rv 11) m,
         ProcCall (Func 2) 10,
-        ProcConst (Var 0) 0,
-        ProcCopyAdd (Var 12) [Var 0],
+        ProcConst (rv 0) 0,
+        ProcCopyAdd (rv 12) [rv 0],
         ProcGoto Ret
       ]
     ],
@@ -61,21 +64,21 @@ pow n m =
     -- Var 1 -- input
     -- Var 2 -- output
     [ -- #0:
-      [ ProcConst (Var 2) 1,
-        ProcConst (Var 3) 0,
+      [ ProcConst (rv 2) 1,
+        ProcConst (rv 3) 0,
         ProcGoto (Lbl 1)
       ],
       -- #1:
-      [ ProcBranch (Var 0) (Lbl 2) (Lbl 3)
+      [ ProcBranch (rv 0) (Lbl 2) (Lbl 3)
       ],
       -- #2:
-      [ ProcCopyAdd (Var 1) [Var 3],
-        ProcCopySub (Var 2) [Var 0],
+      [ ProcCopyAdd (rv 1) [rv 3],
+        ProcCopySub (rv 2) [rv 0],
         ProcGoto (Lbl 1)
       ],
       -- #3:
-      [ ProcConst (Var 2) 0,
-        ProcCopyAdd (Var 3) [Var 2],
+      [ ProcConst (rv 2) 0,
+        ProcCopyAdd (rv 3) [rv 2],
         ProcGoto Ret
       ]
     ],
@@ -84,27 +87,27 @@ pow n m =
     -- Var 1 -- input
     -- Var 2 -- output
     [ -- #0:
-      [ ProcConst (Var 2) 1,
-        ProcConst (Var 3) 1,
+      [ ProcConst (rv 2) 1,
+        ProcConst (rv 3) 1,
         ProcGoto (Lbl 1)
       ],
       -- #1:
-      [ ProcBranch (Var 1) (Lbl 2) (Lbl 3)
+      [ ProcBranch (rv 1) (Lbl 2) (Lbl 3)
       ],
       -- #2:
-      [ ProcConst (Var 10) 0,
-        ProcConst (Var 11) 0,
-        ProcCopyAdd (Var 3) [Var 10],
-        ProcCopyAdd (Var 0) [Var 11],
+      [ ProcConst (rv 10) 0,
+        ProcConst (rv 11) 0,
+        ProcCopyAdd (rv 3) [rv 10],
+        ProcCopyAdd (rv 0) [rv 11],
         ProcCall (Func 1) 10,
-        ProcConst (Var 3) 0,
-        ProcCopyAdd (Var 12) [Var 3],
-        ProcCopySub (Var 2) [Var 1],
+        ProcConst (rv 3) 0,
+        ProcCopyAdd (rv 12) [rv 3],
+        ProcCopySub (rv 2) [rv 1],
         ProcGoto (Lbl 1)
       ],
       -- #3:
-      [ ProcConst (Var 2) 0,
-        ProcCopyAdd (Var 3) [Var 2],
+      [ ProcConst (rv 2) 0,
+        ProcCopyAdd (rv 3) [rv 2],
         ProcGoto Ret
       ]
     ]
@@ -120,10 +123,10 @@ fact :: Int -> [[[UncheckedProc]]]
 fact n =
   [ -- func 0
     [ -- #0:
-      [ ProcConst (Var 10) n,
+      [ ProcConst (rv 10) n,
         ProcCall (Func 2) 10,
-        ProcConst (Var 0) 0,
-        ProcCopyAdd (Var 11) [Var 0],
+        ProcConst (rv 0) 0,
+        ProcCopyAdd (rv 11) [rv 0],
         ProcGoto Ret
       ]
     ],
@@ -132,21 +135,21 @@ fact n =
     -- Var 1 -- input
     -- Var 2 -- output
     [ -- #0:
-      [ ProcConst (Var 2) 1,
-        ProcConst (Var 3) 0
+      [ ProcConst (rv 2) 1,
+        ProcConst (rv 3) 0
         -- ProcGoto (Lbl 1) -- NOTE: Should fallthrough
       ],
       -- #1:
-      [ ProcBranch (Var 0) (Lbl 2) (Lbl 3)
+      [ ProcBranch (rv 0) (Lbl 2) (Lbl 3)
       ],
       -- #2:
-      [ ProcCopyAdd (Var 1) [Var 3],
-        ProcCopySub (Var 2) [Var 0],
+      [ ProcCopyAdd (rv 1) [rv 3],
+        ProcCopySub (rv 2) [rv 0],
         ProcGoto (Lbl 1)
       ],
       -- #3:
-      [ ProcConst (Var 2) 0,
-        ProcCopyAdd (Var 3) [Var 2],
+      [ ProcConst (rv 2) 0,
+        ProcCopyAdd (rv 3) [rv 2],
         ProcGoto Ret
       ]
     ],
@@ -154,27 +157,27 @@ fact n =
     -- Var 0 -- input
     -- Var 1 -- output
     [ -- #0:
-      [ ProcBranch (Var 0) (Lbl 2) (Lbl 1)
+      [ ProcBranch (rv 0) (Lbl 2) (Lbl 1)
       ],
       -- #1:
-      [ ProcConst (Var 1) 1,
+      [ ProcConst (rv 1) 1,
         ProcGoto Ret
       ],
       -- #2:
-      [ ProcConst (Var 10) 0,
-        ProcCopyAdd (Var 0) [Var 10],
-        ProcConst (Var 2) 1,
-        ProcCopySub (Var 2) [Var 10],
+      [ ProcConst (rv 10) 0,
+        ProcCopyAdd (rv 0) [rv 10],
+        ProcConst (rv 2) 1,
+        ProcCopySub (rv 2) [rv 10],
         ProcCall (Func 2) 10,
-        ProcConst (Var 3) 0,
-        ProcCopyAdd (Var 11) [Var 3],
-        ProcConst (Var 10) 0,
-        ProcConst (Var 11) 0,
-        ProcCopyAdd (Var 3) [Var 10],
-        ProcCopyAdd (Var 0) [Var 11],
+        ProcConst (rv 3) 0,
+        ProcCopyAdd (rv 11) [rv 3],
+        ProcConst (rv 10) 0,
+        ProcConst (rv 11) 0,
+        ProcCopyAdd (rv 3) [rv 10],
+        ProcCopyAdd (rv 0) [rv 11],
         ProcCall (Func 1) 10,
-        ProcConst (Var 3) 0,
-        ProcCopyAdd (Var 12) [Var 1],
+        ProcConst (rv 3) 0,
+        ProcCopyAdd (rv 12) [rv 1],
         ProcGoto Ret
       ]
     ]
@@ -190,18 +193,18 @@ sumArray :: [Int] -> [[[UncheckedProc]]]
 sumArray arr =
   let inits = concat $ zipWith initElem [0..] arr in
   [ [ inits ++ [
-        ProcConst (Var 0) 0,
-        ProcConst (Var 1) (length arr),
+        ProcConst (rv 0) 0,
+        ProcConst (rv 1) (length arr),
         ProcGoto (Lbl 1)
       ],
-      [ ProcBranch (Var 1) (Lbl 2) Exit
+      [ ProcBranch (rv 1) (Lbl 2) Exit
       ],
       [
-        ProcConst (Var 2) 1,
-        ProcCopySub (Var 2) [Var 1],
-        ProcConst (ArrTargetVar 3 1) 0,
-        ProcArrayGet (Var 3) (Var 1) 1,
-        ProcCopyAdd (ArrTargetVar 3 1) [Var 0],
+        ProcConst (rv 2) 1,
+        ProcCopySub (rv 2) [rv 1],
+        ProcConst (UP.RefArrayValue (rv 3) 1) 0,
+        ProcArrayGet (rv 3) (rv 1) 1,
+        ProcCopyAdd (UP.RefArrayValue (rv 3) 1) [rv 0],
         ProcGoto (Lbl 1)
       ]
     ]
@@ -209,9 +212,9 @@ sumArray arr =
   where
     initElem :: Int -> Int -> [UncheckedProc]
     initElem idx val =
-      [ ProcConst (Var 1) idx,
-        ProcConst (ArrTargetVar 3 1) val,
-        ProcArraySet (Var 3) (Var 1) 1
+      [ ProcConst (rv 1) idx,
+        ProcConst (UP.RefArrayValue (rv 3) 1) val,
+        ProcArraySet (rv 3) (rv 1) 1
       ]
 
 testSumArray :: [Int] -> Int -> Test

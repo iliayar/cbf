@@ -34,12 +34,17 @@ frameOffset :: Int
 frameOffset = case UIE.convertVar $ UP.convertVar (UP.Var 0) of
     UI.Var i -> i
 
-data Var = Var String | ArrayTargetVar String
+newtype Var = Var String
     deriving (Eq, Ord)
 
 instance Show Var where
     show (Var name) = name
-    show (ArrayTargetVar name) = name ++ ".target"
+
+data Ref = RefVar Var | RefArrayValue Ref
+
+instance Show Ref where
+    show (RefVar var) = show var
+    show (RefArrayValue ref) = show ref ++ ".target"
 
 newtype Lbl = Lbl String
 
@@ -47,33 +52,37 @@ newtype Func = Func String
 
 data SafeProc
   = SProcGoto Lbl
-  | SProcBranch Var Lbl Lbl
-  | SProcConst Var Int
-  | SProcCopyAdd Var [Var]
-  | SProcCopySub Var [Var]
-  | SProcRead Var
-  | SProcWrite Var
-  | SProcCall Func [Var] [Var]
-  | SProcReturn [Var]
-  | SProcAssign Var Var
+  | SProcBranch Ref Lbl Lbl
+  | SProcConst Ref Int
+  | SProcCopyAdd Ref [Ref]
+  | SProcCopySub Ref [Ref]
+  | SProcRead Ref
+  | SProcWrite Ref
+  | SProcCall Func [Ref] [Ref]
+  | SProcReturn [Ref]
+  | SProcAssign Ref Ref
   | SProcAlloc Var Ty
-  | SProcArrayGet Var Var
-  | SProcArraySet Var Var
+  | SProcArrayGet Ref Ref
+  | SProcArraySet Ref Ref
 
 data Block = Block String [SafeProc]
 
 data Function = Function String [(String, Ty)] [Ty] [Block]
 
-data Ty = TyInt | TyArray Ty Int
+data Ty = TyInt | TyArray Ty Int | TyStruct [(String, Ty)]
     deriving (Show, Eq)
 
+getArrayElemTy :: Ty -> Ty
+getArrayElemTy (TyArray ty _) = ty
+getArrayElemTy _ = undefined
+
 getArrayElemSize :: Ty -> Int
-getArrayElemSize (TyArray ty _) = sizeOfType ty
-getArrayElemSize _ = undefined
+getArrayElemSize ty = sizeOfType $ getArrayElemTy ty
 
 sizeOfType :: Ty -> Int
 sizeOfType TyInt = 1
 sizeOfType (TyArray ty n) = UI.arraySize n $ sizeOfType ty
+sizeOfType (TyStruct fs) = foldl (\acc (_, ty) -> acc + sizeOfType ty) 0 fs
 
 isVarTy :: Ty -> Bool
 isVarTy TyInt = True
@@ -116,8 +125,8 @@ enterFunction (Function name args rets _) = do
         cFunctions = M.insert name (args, rets) cFunctions,
         cVariables = M.insert name M.empty cVariables
       }
-  forM_ args $ \(var, ty) -> recordVar' (Var var) ty
-  forM_ (zip [1..] rets) $ \(i, ty) -> recordVar' (Var $ makeRetVar name i) ty
+  forM_ args $ \(var, ty) -> recordVar' (RefVar $ Var var) ty
+  forM_ (zip [1..] rets) $ \(i, ty) -> recordVar' (RefVar $ Var $ makeRetVar name i) ty
 
 finishFunction :: Converter ()
 finishFunction = do
@@ -180,8 +189,8 @@ addInstructions insts = do
 addInstructionsPure :: [UncheckedProc] -> Converter ()
 addInstructionsPure = addInstructions . return
 
-recordVar' :: Var -> Ty -> Converter ()
-recordVar' (Var name) ty = do
+recordVar' :: Ref -> Ty -> Converter ()
+recordVar' (RefVar (Var name)) ty = do
   st@(ConverterState {cVariables}) <- ST.get
   currentFunc <- currentFunction
   case M.lookup currentFunc cVariables of
@@ -194,10 +203,10 @@ recordVar' (Var name) ty = do
               { cVariables = M.insert currentFunc (M.insert name ty vars) cVariables
               }
         Just _ -> return ()
-recordVar' (ArrayTargetVar _) _ = return ()
+recordVar' (RefArrayValue _) _ = return ()
 
-recordVar :: Var -> Converter ()
-recordVar var = recordVar' var TyInt
+recordVar :: Ref -> Converter ()
+recordVar ref = recordVar' ref TyInt
 
 data ResolverState = ResolverState
   { rBlocksMapping :: M.Map (String, String) Int,
@@ -249,44 +258,53 @@ resolveTy (Var name) = do
     return $ case M.lookup name $ rTys M.! currentFunc of
         Nothing -> error $ "Unknown type of variable " ++ name ++ ". Probably array was not allocated"
         Just ty -> ty
-resolveTy (ArrayTargetVar name) = do
-    _ <- resolveTy (Var name)
-    return TyInt
 
-resolveVarSize :: Var -> Resolver Int
-resolveVarSize v = sizeOfType <$> resolveTy v
+resolveRefWithTyName :: Ref -> Resolver (String, UP.Ref, Ty)
+resolveRefWithTyName (RefVar var) = do
+    (name, var', ty) <- resolveVarWithTyName var
+    return (name, UP.RefVar var', ty) 
+resolveRefWithTyName (RefArrayValue ref) = do
+    (name, ref', ty) <- resolveRefWithTyName ref
+    let eTy = getArrayElemTy ty
+    return (name ++ ".value", UP.RefArrayValue ref' $ sizeOfType eTy, eTy)
 
-resolveVar :: Var -> Resolver UP.Var
-resolveVar v@(Var name) =
-  UP.Var <$> do
-    st@(ResolverState {rVars, rVarsCnt}) <- ST.get
-    case M.lookup name rVars of
+resolveRefWithTy :: Ref -> Resolver (UP.Ref, Ty)
+resolveRefWithTy ref = do
+    (_, ref', ty) <- resolveRefWithTyName ref
+    return (ref', ty)
+
+resolveRef :: Ref -> Resolver UP.Ref
+resolveRef ref = do
+    (ref', _) <- resolveRefWithTy ref
+    return ref'
+
+resolveVarWithTyName :: Var -> Resolver (String, UP.Var, Ty)
+resolveVarWithTyName (Var name) = do
+    st@(ResolverState {rVars, rVarsCnt, rTys}) <- ST.get
+    currentFunc <- resolveCurrentFunction
+    let ty = case M.lookup name $ rTys M.! currentFunc of
+          Nothing -> error $ "Unknown type of variable " ++ name ++ ". Probably array was not allocated"
+          Just ty' -> ty'
+    var <- case M.lookup name rVars of
       Nothing -> do
-        size <- resolveVarSize v
         ST.put $
           st
             { rVars = M.insert name rVarsCnt rVars,
-              rVarsCnt = rVarsCnt + size
+              rVarsCnt = rVarsCnt + sizeOfType ty
             }
         return rVarsCnt
       Just idx -> return idx
-resolveVar (ArrayTargetVar name) = do
-    (v', aTy) <- resolveVarWithTy (Var name)
-    case v' of
-        UP.Var idx -> return $ UP.ArrTargetVar idx (getArrayElemSize aTy)
-        _ -> error "Array expected to resolve in Var"
+    return (name, UP.Var var, ty)
+
+resolveVar :: Var -> Resolver UP.Var
+resolveVar v = do
+    (v', _) <- resolveVarWithTy v
+    return v'
 
 resolveVarWithTy :: Var -> Resolver (UP.Var, Ty)
 resolveVarWithTy v = do
-    v' <- resolveVar v
-    ty <- resolveTy v
+    (_, v', ty) <- resolveVarWithTyName v
     return (v', ty)
-
-resolveVarWithTyName :: Var -> Resolver (String, UP.Var, Ty)
-resolveVarWithTyName v = do
-    v' <- resolveVar v
-    ty <- resolveTy v
-    return (show v, v', ty)
 
 makeRetVar :: String -> Int -> String
 makeRetVar funcName n = "$" ++ funcName ++ "/ret" ++ show n
@@ -370,68 +388,68 @@ convert proc =
       addInstructions $ do
         lbl' <- resolveLbl lbl
         return [ProcGoto lbl']
-    convertInst' (SProcBranch var thenLbl elseLbl) = do
-      recordVar var
+    convertInst' (SProcBranch ref thenLbl elseLbl) = do
+      recordVar ref
       addInstructions $ do
-        var' <- resolveVar var
+        ref' <- resolveRef ref
         thenLbl' <- resolveLbl thenLbl
         elseLbl' <- resolveLbl elseLbl
-        return [ProcBranch var' thenLbl' elseLbl']
-    convertInst' (SProcConst var n) = do
-      recordVar var
+        return [ProcBranch ref' thenLbl' elseLbl']
+    convertInst' (SProcConst ref n) = do
+      recordVar ref
       addInstructions $ do
-        (var', ty) <- resolveVarWithTy var
+        (ref', ty) <- resolveRefWithTy ref
         unless (isVarTy ty) $ error "Const can be used only with VarTy"
-        return [ProcConst var' n]
-    convertInst' (SProcCopyAdd var vars) = do
-      recordVar var
-      forM_ vars recordVar
+        return [ProcConst ref' n]
+    convertInst' (SProcCopyAdd ref refs) = do
+      recordVar ref
+      forM_ refs recordVar
       addInstructions $ do
-        (var', ty) <- resolveVarWithTy var
-        vars' <- forM vars resolveVarWithTy
-        unless (isVarTy ty && all (isVarTy . snd) vars') $ error "CopyAdd can be used only with VarTy"
-        return [ProcCopyAdd var' (fmap fst vars')]
-    convertInst' (SProcCopySub var vars) = do
-      recordVar var
-      forM_ vars recordVar
+        (ref', ty) <- resolveRefWithTy ref
+        refs' <- forM refs resolveRefWithTy
+        unless (isVarTy ty && all (isVarTy . snd) refs') $ error "CopyAdd can be used only with VarTy"
+        return [ProcCopyAdd ref' (fmap fst refs')]
+    convertInst' (SProcCopySub ref refs) = do
+      recordVar ref
+      forM_ refs recordVar
       addInstructions $ do
-        (var', ty) <- resolveVarWithTy var
-        vars' <- forM vars resolveVarWithTy
-        unless (isVarTy ty && all (isVarTy . snd) vars') $ error "CopySub can be used only with VarTy"
-        return [ProcCopySub var' (fmap fst vars')]
-    convertInst' (SProcRead var) = do
-      recordVar var
+        (ref', ty) <- resolveRefWithTy ref
+        refs' <- forM refs resolveRefWithTy
+        unless (isVarTy ty && all (isVarTy . snd) refs') $ error "CopySub can be used only with VarTy"
+        return [ProcCopySub ref' (fmap fst refs')]
+    convertInst' (SProcRead ref) = do
+      recordVar ref
       addInstructions $ do
-        (var', ty) <- resolveVarWithTy var
+        (ref', ty) <- resolveRefWithTy ref
         unless (isVarTy ty) $ error "Read can be used only with VarTy"
-        return [ProcRead var']
-    convertInst' (SProcWrite var) = do
-      recordVar var
+        return [ProcRead ref']
+    convertInst' (SProcWrite ref) = do
+      recordVar ref
       addInstructions $ do
-        (var', ty) <- resolveVarWithTy var
+        (ref', ty) <- resolveRefWithTy ref
         unless (isVarTy ty) $ error "Read can be used only with VarTy"
-        return [ProcWrite var']
-    convertInst' (SProcCall func@(Func name) argVars retVars) = do
-      forM_ argVars recordVar
-      forM_ retVars recordVar
+        return [ProcWrite ref']
+    convertInst' (SProcCall func@(Func name) argRefs retRefs) = do
+      forM_ argRefs recordVar
+      forM_ retRefs recordVar
       addInstructions $ do
         ResolvedFunc {rfIdx, rfArgTys, rfRetTys} <- resolveFunc func
-        unless (length rfArgTys == length argVars) $
+        unless (length rfArgTys == length argRefs) $
           error $
             "Invalid call to function "
               ++ name
               ++ ". Expected "
               ++ show (length rfArgTys)
               ++ " args, provided "
-              ++ show (length argVars)
-        unless (length rfRetTys == length retVars) $
+              ++ show (length argRefs)
+        unless (length rfRetTys == length retRefs) $
           error $
             "Invalid call to function "
               ++ name
               ++ ". Expected "
               ++ show (length rfRetTys)
               ++ " return values, provided "
-              ++ show (length retVars)
+              ++ show (length retRefs)
         localsSize <- resolveLocalsSize
         -- \| Current fame                                    | Callee frame                  | ...
         -- \|                             | localsSize        |             | Locals          | ...
@@ -440,78 +458,78 @@ convert proc =
             -- NOTE: UP.Var when converting will shift index by frameOffset, so subtracting it
             argVarsBase = (shiftSize + frameOffset) - frameOffset
             retVarsBase = argVarsBase + foldl (\sz ty -> sz + sizeOfType ty) 0 rfArgTys
-        argVars' <- forM argVars resolveVarWithTyName
-        retVars' <- forM retVars resolveVarWithTyName
+        argRefs' <- forM argRefs resolveRefWithTyName
+        retRefs' <- forM retRefs resolveRefWithTyName
         let calleeArgs = 
-                fst $ foldr (\ty (res, base) -> (("CALL_ARG", UP.Var base, ty) : res, base + sizeOfType ty))
+                fst $ foldr (\ty (res, base) -> (("CALL_ARG", UP.RefVar $ UP.Var base, ty) : res, base + sizeOfType ty))
                     ([], argVarsBase) rfArgTys
             calleeRets = 
-                fst $ foldr (\ty (res, base) -> (("CALL_RET", UP.Var base, ty) : res, base + sizeOfType ty))
+                fst $ foldr (\ty (res, base) -> (("CALL_RET", UP.RefVar $ UP.Var base, ty) : res, base + sizeOfType ty))
                     ([], retVarsBase) rfRetTys
-        argAssgns <- concat <$> forM (zip calleeArgs argVars') (uncurry makeAssignment')
-        retAssgns <- concat <$> forM (zip retVars' calleeRets) (uncurry makeAssignment')
+        argAssgns <- concat <$> forM (zip calleeArgs argRefs') (uncurry makeAssignment')
+        retAssgns <- concat <$> forM (zip retRefs' calleeRets) (uncurry makeAssignment')
         return $ argAssgns ++ [ProcCall (UP.Func rfIdx) shiftSize] ++ retAssgns
-    convertInst' (SProcReturn retVars) = do
-        forM_ retVars recordVar
+    convertInst' (SProcReturn retRefs) = do
+        forM_ retRefs recordVar
         addInstructions $ do
             currentFunc <- resolveCurrentFunction
             ResolvedFunc { rfRetTys } <- resolveFunc (Func currentFunc)
-            unless (length rfRetTys == length retVars) $
+            unless (length rfRetTys == length retRefs) $
               error $
                 "Invalid return in "
                   ++ currentFunc
                   ++ ". Expected "
                   ++ show (length rfRetTys)
                   ++ " return values, provided "
-                  ++ show (length retVars)
-            let rets = [ Var $ makeRetVar currentFunc idx | idx <- [1 .. length rfRetTys] ]
-            retAssgns <- concat <$> forM (zip rets retVars) (uncurry makeAssignment)
+                  ++ show (length retRefs)
+            let rets = [ RefVar $ Var $ makeRetVar currentFunc idx | idx <- [1 .. length rfRetTys] ]
+            retAssgns <- concat <$> forM (zip rets retRefs) (uncurry makeAssignment)
             return $ retAssgns ++ [ ProcGoto UP.Ret ]
-    convertInst' (SProcAssign dv sv) = do
+    convertInst' (SProcAssign dr sr) = do
         -- FIXME: Actually its wrong to record these vars as VarTy
         -- Or maybe OK
-        recordVar dv
-        recordVar sv
-        addInstructions $ makeAssignment dv sv
-    convertInst' (SProcAlloc var ty) = recordVar' var ty 
-    convertInst' (SProcArrayGet av iv) = do
-        recordVar iv
+        recordVar dr
+        recordVar sr
+        addInstructions $ makeAssignment dr sr
+    convertInst' (SProcAlloc var ty) = recordVar' (RefVar var) ty 
+    convertInst' (SProcArrayGet ar ir) = do
+        recordVar ir
         addInstructions $ do
-            (iv', iTy) <- resolveVarWithTy iv
-            (av', aTy) <- resolveVarWithTy av
+            (ir', iTy) <- resolveRefWithTy ir
+            (ar', aTy) <- resolveRefWithTy ar
             unless (isVarTy iTy) $ error "Index in ArrayGet must be of type VarTy"
             unless (isArrayTy aTy) $ error "Array in ArrayGet must be of type VarTy"
-            return [ ProcArrayGet av' iv' (getArrayElemSize aTy) ]
-    convertInst' (SProcArraySet av iv) = do
-        recordVar iv
+            return [ ProcArrayGet ar' ir' (getArrayElemSize aTy) ]
+    convertInst' (SProcArraySet ar ir) = do
+        recordVar ir
         addInstructions $ do
-            (iv', iTy) <- resolveVarWithTy iv
-            (av', aTy) <- resolveVarWithTy av
+            (ir', iTy) <- resolveRefWithTy ir
+            (ar', aTy) <- resolveRefWithTy ar
             unless (isVarTy iTy) $ error "Index in ArrayGet must be of type VarTy"
             unless (isArrayTy aTy) $ error "Array in ArrayGet must be of type VarTy"
-            return [ ProcArraySet av' iv' (getArrayElemSize aTy) ]
+            return [ ProcArraySet ar' ir' (getArrayElemSize aTy) ]
 
-    makeAssignment' :: (String, UP.Var, Ty) -> (String, UP.Var, Ty) -> Resolver [UncheckedProc]
-    makeAssignment' (dname, dv', dvTy) (sname, sv', svTy) = do
-        case (dvTy, svTy) of
+    makeAssignment' :: (String, UP.Ref, Ty) -> (String, UP.Ref, Ty) -> Resolver [UncheckedProc]
+    makeAssignment' (dname, dr', drTy) (sname, sr', srTy) = do
+        case (drTy, srTy) of
             (TyInt, TyInt) -> return
-              [ ProcConst dv' 0,
-                ProcCopyAdd sv' [dv']
+              [ ProcConst dr' 0,
+                ProcCopyAdd sr' [dr']
               ]
-            (TyArray dveTy dvSize, TyArray sveTy svSize) -> do
-                unless (dvSize == svSize && dvTy == svTy) $ 
+            (TyArray dreTy drSize, TyArray sreTy srSize) -> do
+                unless (drSize == srSize && drTy == srTy) $ 
                     error $ "Cannot assign array " ++ sname ++ " to " ++ dname
-                      ++ ". Size {" ++ show sveTy ++ "}" ++ show svSize ++ " not match size {" 
-                      ++ show dveTy ++ "}" ++ show dvSize
-                return [ ProcArrayCopy sv' dv' dvSize (sizeOfType dveTy) ]
-            _ -> error $ "Cannot assign variable " ++ sname ++ " of type " ++ show svTy
-                    ++ " to variable " ++ dname ++ " of type " ++ show dvTy
+                      ++ ". Size {" ++ show sreTy ++ "}" ++ show srSize ++ " not match size {" 
+                      ++ show dreTy ++ "}" ++ show drSize
+                return [ ProcArrayCopy sr' dr' drSize (sizeOfType dreTy) ]
+            _ -> error $ "Cannot assign variable " ++ sname ++ " of type " ++ show srTy
+                    ++ " to variable " ++ dname ++ " of type " ++ show drTy
 
-    makeAssignment :: Var -> Var -> Resolver [UncheckedProc]
-    makeAssignment dv sv = do
-        (dv', dvTy) <- resolveVarWithTy dv
-        (sv', svTy) <- resolveVarWithTy sv
-        makeAssignment' (show dv, dv', dvTy) (show sv, sv', svTy)
+    makeAssignment :: Ref -> Ref -> Resolver [UncheckedProc]
+    makeAssignment dr sr = do
+        (dr', drTy) <- resolveRefWithTy dr
+        (sr', srTy) <- resolveRefWithTy sr
+        makeAssignment' (show dr, dr', drTy) (show sr, sr', srTy)
 
 progToString :: Program -> String
 progToString prog = runWriter $ progToString' prog
@@ -547,31 +565,34 @@ progToString prog = runWriter $ progToString' prog
     funcToString :: Func -> String
     funcToString (Func name) = name
 
+    refToString (RefVar v) = varToString v
+    refToString (RefArrayValue ref) = "%" ++ refToString ref ++ ".target"
+
     instToString :: SafeProc -> ProgWriter ()
     instToString (SProcGoto lbl) = write $ "goto " ++ lblToString lbl
-    instToString (SProcBranch var thenLbl elseLbl) = do
-        write $ "if " ++ varToString var ++ " != 0 {"
+    instToString (SProcBranch ref thenLbl elseLbl) = do
+        write $ "if " ++ refToString ref ++ " != 0 {"
         withIndent $ nl >> write ("goto " ++ lblToString thenLbl)
         nl >> write "} else {"
         withIndent $ nl >> write ("goto " ++ lblToString elseLbl)
         nl >> write "}"
-    instToString (SProcConst var n) = write $ varToString var ++ " := " ++ show n
-    instToString (SProcCopyAdd v vs) =
-        write $ intercalate "; " (fmap (\v' -> varToString v' ++ " += " ++ varToString v) vs)
-    instToString (SProcCopySub v vs) =
-        write $ intercalate "; " (fmap (\v' -> varToString v' ++ " -= " ++ varToString v) vs)
-    instToString (SProcRead v) = write $ "read " ++ varToString v
-    instToString (SProcWrite v) = write $ "write " ++ varToString v
+    instToString (SProcConst ref n) = write $ refToString ref ++ " := " ++ show n
+    instToString (SProcCopyAdd r rs) =
+        write $ intercalate "; " (fmap (\r' -> refToString r' ++ " += " ++ refToString r) rs)
+    instToString (SProcCopySub r rs) =
+        write $ intercalate "; " (fmap (\r' -> refToString r' ++ " -= " ++ refToString r) rs)
+    instToString (SProcRead r) = write $ "read " ++ refToString r
+    instToString (SProcWrite r) = write $ "write " ++ refToString r
     instToString (SProcCall func args rets) =
-        write $ "call " ++ funcToString func ++ "(" ++ intercalate ", " (fmap varToString args) ++ ")"
-            ++ " [" ++ intercalate ", " (fmap varToString rets) ++ "]"
-    instToString (SProcReturn vars) =
-        write $ "return [" ++ intercalate ", " (fmap varToString vars) ++ "]"
+        write $ "call " ++ funcToString func ++ "(" ++ intercalate ", " (fmap refToString args) ++ ")"
+            ++ " [" ++ intercalate ", " (fmap refToString rets) ++ "]"
+    instToString (SProcReturn refs) =
+        write $ "return [" ++ intercalate ", " (fmap refToString refs) ++ "]"
     instToString (SProcAlloc var ty) =
         write $ "alloc " ++ varToString var ++ "[" ++ show ty ++ "]"
-    instToString (SProcAssign dv sv) =
-        write $ varToString dv ++ " = " ++ varToString sv
-    instToString (SProcArrayGet av iv) =
-        write $ "get " ++ varToString av ++ "[" ++ varToString iv ++ "]"
-    instToString (SProcArraySet av iv) =
-        write $ "set " ++ varToString av ++ "[" ++ varToString iv ++ "]"
+    instToString (SProcAssign dr sr) =
+        write $ refToString dr ++ " = " ++ refToString sr
+    instToString (SProcArrayGet ar ir) =
+        write $ "get " ++ refToString ar ++ "[" ++ refToString ir ++ "]"
+    instToString (SProcArraySet ar ir) =
+        write $ "set " ++ refToString ar ++ "[" ++ refToString ir ++ "]"

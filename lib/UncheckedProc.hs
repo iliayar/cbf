@@ -55,12 +55,21 @@ import ProgWriter
 --
 -- every block that doesn't ends with branch or goto, will implicitly get it
 
-data Var = ArrTargetVar Int Int | Var Int | RetVar
+data Var = Var Int | RetVar
 
 convertVar :: Var -> UIE.Var
 convertVar (Var i) = UIE.Var $ i + 1
-convertVar (ArrTargetVar i s) = UIE.ArrTargetVar (i + 1) s
+-- convertVar (ArrTargetVar i s) = UIE.convertRef $ UIE.RefArrayValue (UIE.RefVar $ UIE.Var $ i + 1) s
 convertVar RetVar = UIE.Var 0
+
+data Ref = RefVar Var | RefArrayValue Ref Int
+
+convertRef :: Ref -> UIE.Ref
+convertRef (RefVar v) = UIE.RefVar $ convertVar v
+convertRef (RefArrayValue ref i) = UIE.RefArrayValue (convertRef ref) i
+
+-- mkArrTargetVar :: UIE.Var -> UIE.Var
+-- mkArrTargetVar (Var i) = UIE.Var $ 
 
 data Lbl = Lbl Int | Exit | Ret
 
@@ -68,22 +77,22 @@ newtype Func = Func Int
 
 data UncheckedProc
   = ProcGoto Lbl
-  | ProcBranch Var Lbl Lbl
-  | ProcConst Var Int
-  | ProcCopyAdd Var [Var]
-  | ProcCopySub Var [Var]
-  | ProcRead Var
-  | ProcWrite Var
+  | ProcBranch Ref Lbl Lbl
+  | ProcConst Ref Int
+  | ProcCopyAdd Ref [Ref]
+  | ProcCopySub Ref [Ref]
+  | ProcRead Ref
+  | ProcWrite Ref
   | ProcCall Func Int
-  | ProcArrayCopy Var Var Int Int
-  | ProcArrayGet Var Var Int
-  | ProcArraySet Var Var Int
+  | ProcArrayCopy Ref Ref Int Int
+  | ProcArrayGet Ref Ref Int
+  | ProcArraySet Ref Ref Int
 
 isTerminator :: UncheckedInstExt -> Bool
 isTerminator (InsExtGoto _) = True
 isTerminator (InsExtBranch {}) = True
-isTerminator (InsExtCopyAdd _ [UIE.Pc]) = True
-isTerminator (InsExtConst UIE.Pc _) = True
+isTerminator (InsExtCopyAdd _ [UIE.RefVar UIE.Pc]) = True
+isTerminator (InsExtConst (UIE.RefVar UIE.Pc) _) = True
 isTerminator _ = False
 
 data ConverterState = ConverterState
@@ -218,7 +227,7 @@ convert proc =
       addInstructions $ do
         firstFunc <- resolveCall 0
         return
-          [ InsExtConst (convertVar RetVar) (i + 1),
+          [ InsExtConst (convertRef $ RefVar RetVar) (i + 1),
             InsExtGoto firstFunc
           ]
       createBlock
@@ -239,8 +248,8 @@ convert proc =
       recordFuncRet funcIdx retBlockIdx
       addInstructionsPure
         [ -- FIXME: Call the plumber, we are leaking hard
-          InsExtConst UIE.Pc $ UIE.transLbl $ UIE.Lbl 0,
-          InsExtCopyAdd (convertVar RetVar) [UIE.Pc]
+          InsExtConst (UIE.RefVar UIE.Pc) $ UIE.transLbl $ UIE.Lbl 0,
+          InsExtCopyAdd (convertRef $ RefVar RetVar) [UIE.RefVar UIE.Pc]
         ]
 
     convertBlock' :: Int -> Int -> [UncheckedProc] -> Converter ()
@@ -257,36 +266,36 @@ convert proc =
         lbl' <- resolveLbl funcIdx lbl
         return [InsExtGoto lbl']
       createBlock
-    convertInst' funcIdx (ProcBranch v thenLbl elseLbl) = do
+    convertInst' funcIdx (ProcBranch r thenLbl elseLbl) = do
       _ <- reserveBlocks' 1
       addInstructions $ do
         thenLbl' <- resolveLbl funcIdx thenLbl
         elseLbl' <- resolveLbl funcIdx elseLbl
-        return [InsExtBranch (convertVar v) thenLbl' elseLbl']
+        return [InsExtBranch (convertRef r) thenLbl' elseLbl']
       createBlock 
-    convertInst' _ (ProcConst v n) = addInstructionsPure [InsExtConst (convertVar v) n]
-    convertInst' _ (ProcCopyAdd v vs) =
-      addInstructionsPure [InsExtCopyAdd (convertVar v) (fmap convertVar vs)]
-    convertInst' _ (ProcCopySub v vs) =
-      addInstructionsPure [InsExtCopySub (convertVar v) (fmap convertVar vs)]
-    convertInst' _ (ProcRead v) = addInstructionsPure [InsExtRead $ convertVar v]
-    convertInst' _ (ProcWrite v) = addInstructionsPure [InsExtWrite $ convertVar v]
+    convertInst' _ (ProcConst r n) = addInstructionsPure [InsExtConst (convertRef r) n]
+    convertInst' _ (ProcCopyAdd r rs) =
+      addInstructionsPure [InsExtCopyAdd (convertRef r) (fmap convertRef rs)]
+    convertInst' _ (ProcCopySub r rs) =
+      addInstructionsPure [InsExtCopySub (convertRef r) (fmap convertRef rs)]
+    convertInst' _ (ProcRead r) = addInstructionsPure [InsExtRead $ convertRef r]
+    convertInst' _ (ProcWrite r) = addInstructionsPure [InsExtWrite $ convertRef r]
     convertInst' _ (ProcCall (Func i) n) = do
       retLbl <- reserveBlocks' 1
       addInstructions $ do
         funcLbl <- resolveCall i
         return
           [ InsExtIntrinsic [InstIntrinsic [BfExtMoveRight n]],
-            InsExtConst (convertVar RetVar) retLbl,
+            InsExtConst (convertRef $ RefVar RetVar) retLbl,
             InsExtGoto funcLbl
           ]
       createBlock
       addInstructionsPure
         [InsExtIntrinsic [InstIntrinsic [BfExtMoveLeft n]]]
       addInstructions (return [])
-    convertInst' _ (ProcArrayCopy fv tv sz s) = addInstructionsPure [InsExtArrayCopy (convertVar fv) (convertVar tv) sz s]
-    convertInst' _ (ProcArrayGet av iv s) = addInstructionsPure [InsExtArrayGet (convertVar av) (convertVar iv) s]
-    convertInst' _ (ProcArraySet av iv s) = addInstructionsPure [InsExtArraySet (convertVar av) (convertVar iv) s]
+    convertInst' _ (ProcArrayCopy fr tr sz s) = addInstructionsPure [InsExtArrayCopy (convertRef fr) (convertRef tr) sz s]
+    convertInst' _ (ProcArrayGet ar ir s) = addInstructionsPure [InsExtArrayGet (convertRef ar) (convertRef ir) s]
+    convertInst' _ (ProcArraySet ar ir s) = addInstructionsPure [InsExtArraySet (convertRef ar) (convertRef ir) s]
 
 progToString :: [[[UncheckedProc]]] -> String
 progToString prog = runWriter $ progToString' prog
@@ -315,31 +324,33 @@ progToString prog = runWriter $ progToString' prog
 
     varToString :: Var -> String
     varToString (Var i) = "%" ++ show i
-    varToString (ArrTargetVar i s) = "%" ++ show i ++ "{" ++ show s ++ "}.target"
     varToString RetVar = "%ret"
+
+    refToString (RefVar v) = varToString v
+    refToString (RefArrayValue ref s) = "%" ++ refToString ref ++ "{" ++ show s ++ "}.target"
 
     funcToString :: Func -> String
     funcToString (Func i) = "func " ++ show i
 
     instToString :: UncheckedProc -> ProgWriter ()
-    instToString (ProcConst var n) = write $ varToString var ++ " := " ++ show n
+    instToString (ProcConst ref n) = write $ refToString ref ++ " := " ++ show n
     instToString (ProcGoto l) = write $ "goto " ++ lblToString l
-    instToString (ProcBranch var thenLbl elseLbl) = do
-      write $ "if " ++ varToString var ++ " != 0 {"
+    instToString (ProcBranch ref thenLbl elseLbl) = do
+      write $ "if " ++ refToString ref ++ " != 0 {"
       withIndent $ nl >> write ("goto " ++ lblToString thenLbl)
       nl >> write "} else {"
       withIndent $ nl >> write ("goto " ++ lblToString elseLbl)
       nl >> write "}"
-    instToString (ProcCopyAdd v vs) =
-      write $ intercalate "; " (fmap (\v' -> varToString v' ++ " += " ++ varToString v) vs)
-    instToString (ProcCopySub v vs) =
-      write $ intercalate "; " (fmap (\v' -> varToString v' ++ " -= " ++ varToString v) vs)
-    instToString (ProcRead v) = write $ "read " ++ varToString v
-    instToString (ProcWrite v) = write $ "write " ++ varToString v
+    instToString (ProcCopyAdd r rs) =
+      write $ intercalate "; " (fmap (\r' -> refToString r' ++ " += " ++ refToString r) rs)
+    instToString (ProcCopySub r rs) =
+      write $ intercalate "; " (fmap (\r' -> refToString r' ++ " -= " ++ refToString r) rs)
+    instToString (ProcRead r) = write $ "read " ++ refToString r
+    instToString (ProcWrite r) = write $ "write " ++ refToString r
     instToString (ProcCall f n) = write $ "call[" ++ show n ++ "] " ++ funcToString f
-    instToString (ProcArrayCopy fv tv sz s) =
-        write $ varToString tv ++ "{" ++ show s ++ "}[0.." ++ show sz ++ "] = " ++ varToString fv ++ "[0.." ++ show sz ++ "]"
-    instToString (ProcArrayGet av iv s) =
-        write $ "set{" ++ show s ++ "}" ++ varToString av ++ "[" ++ varToString iv ++ "]"
-    instToString (ProcArraySet av iv s) =
-        write $  "get{" ++ show s ++ "}" ++ varToString av ++ "[" ++ varToString iv ++ "]"
+    instToString (ProcArrayCopy fr tr sz s) =
+        write $ refToString tr ++ "{" ++ show s ++ "}[0.." ++ show sz ++ "] = " ++ refToString fr ++ "[0.." ++ show sz ++ "]"
+    instToString (ProcArrayGet ar ir s) =
+        write $ "set{" ++ show s ++ "}" ++ refToString ar ++ "[" ++ refToString ir ++ "]"
+    instToString (ProcArraySet ar ir s) =
+        write $  "get{" ++ show s ++ "}" ++ refToString ar ++ "[" ++ refToString ir ++ "]"

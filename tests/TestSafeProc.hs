@@ -6,7 +6,7 @@ module TestSafeProc where
 import qualified BasicExt
 import Executer (execute)
 import SafeProc (Block (..), Func (..), Function (..), Lbl (..), Program (..), SafeProc (..), Var (..), Ty (..))
-import qualified SafeProc
+import qualified SafeProc as SP
 import Test.HUnit
 import qualified UncheckedInsts
 import qualified UncheckedInstsExt
@@ -19,33 +19,36 @@ evaluate program =
       UncheckedInsts.convert $
         UncheckedInstsExt.convert $
           UncheckedProc.convert $
-            SafeProc.convert program
+            SP.convert program
+
+rv :: String -> SP.Ref
+rv s = SP.RefVar $ SP.Var s
 
 mult :: Int -> Int -> Program
 mult n m =
   Program
     [ (Function "main" [] [])
         [ (Block "init")
-            [ SProcConst (Var "a") n,
-              SProcConst (Var "b") m,
-              SProcCall (Func "mult") [Var "a", Var "b"] [Var "c"]
+            [ SProcConst (rv "a") n,
+              SProcConst (rv "b") m,
+              SProcCall (Func "mult") [rv "a", rv "b"] [rv "c"]
             ]
         ],
       (Function "mult" [("a", TyInt), ("b", TyInt)] [TyInt])
         [ (Block "init")
-            [ SProcConst (Var "ONE") 1,
-              SProcConst (Var "res") 0
+            [ SProcConst (rv "ONE") 1,
+              SProcConst (rv "res") 0
             ],
           (Block "loop_begin")
-            [ SProcBranch (Var "a") (Lbl "loop_body") (Lbl "return")
+            [ SProcBranch (rv "a") (Lbl "loop_body") (Lbl "return")
             ],
           (Block "loop_body")
-            [ SProcCopyAdd (Var "b") [Var "res"],
-              SProcCopySub (Var "ONE") [Var "a"],
+            [ SProcCopyAdd (rv "b") [rv "res"],
+              SProcCopySub (rv "ONE") [rv "a"],
               SProcGoto (Lbl "loop_begin")
             ],
           (Block "return")
-            [SProcReturn [Var "res"]]
+            [SProcReturn [rv "res"]]
         ]
     ]
 
@@ -54,43 +57,43 @@ fact n =
   Program
     [ (Function "main" [] [])
       [ (Block "init")
-        [ SProcConst (Var "a") n
-        , SProcCall (Func "fact") [Var "a"] [Var "a"]
+        [ SProcConst (rv "a") n
+        , SProcCall (Func "fact") [rv "a"] [rv "a"]
         ]
       ]
     , (Function "mult" [("a", TyInt), ("b", TyInt)] [TyInt])
         [ (Block "init")
-          [ SProcConst (Var "ONE") 1
-          , SProcConst (Var "res") 0
+          [ SProcConst (rv "ONE") 1
+          , SProcConst (rv "res") 0
           , SProcGoto (Lbl "loop_begin")
           ]
         , (Block "loop_begin")
-          [ SProcBranch (Var "a") (Lbl "loop_body") (Lbl "return")
+          [ SProcBranch (rv "a") (Lbl "loop_body") (Lbl "return")
           ]
         , (Block "loop_body")
-          [ SProcCopyAdd (Var "b") [Var "res"]
-          , SProcCopySub (Var "ONE") [Var "a"]
+          [ SProcCopyAdd (rv "b") [rv "res"]
+          , SProcCopySub (rv "ONE") [rv "a"]
           , SProcGoto (Lbl "loop_begin")
           ]
         , (Block "return")
-          [ SProcReturn [Var "res"] ]
+          [ SProcReturn [rv "res"] ]
         ]
     , (Function "fact" [("a", TyInt)] [TyInt])
       [ (Block "init")
-        [ SProcBranch (Var "a") (Lbl "step") (Lbl "base")
+        [ SProcBranch (rv "a") (Lbl "step") (Lbl "base")
         ]
       , (Block "step")
-        [ SProcConst (Var "ONE") 1
-        , SProcConst (Var "b") 0
-        , SProcCopyAdd (Var "a") [Var "b"]
-        , SProcCopySub (Var "ONE") [Var "b"]
-        , SProcCall (Func "fact") [Var "b"] [Var "b"]
-        , SProcCall (Func "mult") [Var "a", Var "b"] [Var "b"]
-        , SProcReturn [Var "b"]
+        [ SProcConst (rv "ONE") 1
+        , SProcConst (rv "b") 0
+        , SProcCopyAdd (rv "a") [rv "b"]
+        , SProcCopySub (rv "ONE") [rv "b"]
+        , SProcCall (Func "fact") [rv "b"] [rv "b"]
+        , SProcCall (Func "mult") [rv "a", rv "b"] [rv "b"]
+        , SProcReturn [rv "b"]
         ]
       , (Block "base")
-        [ SProcConst (Var "ONE") 1
-        , SProcReturn [Var "ONE"]
+        [ SProcConst (rv "ONE") 1
+        , SProcReturn [rv "ONE"]
         ]
       ]
     ]
@@ -114,56 +117,56 @@ sumArray arr =
   Program
     [ (Function "main" [] [])
         [ (Block "init") $
-            [ SProcConst (Var "b") 0,
+            [ SProcConst (rv "b") 0,
               SProcAlloc (Var "a") $ TyArray TyInt $ length arr
             ] ++ inits ++
-            [ SProcCall (Func "inc_all") [Var "a"] [Var "a"],
-              SProcCall (Func "sum") [Var "a"] [Var "b"] ]
+            [ SProcCall (Func "inc_all") [rv "a"] [rv "a"],
+              SProcCall (Func "sum") [rv "a"] [rv "b"] ]
         ],
       (Function "sum" [("a", TyArray TyInt $ length arr)] [TyInt])
         [ (Block "init")
-            [ SProcConst (Var "ONE") 1,
-              SProcConst (Var "res") 0,
-              SProcConst (Var "i") $ length arr
+            [ SProcConst (rv "ONE") 1,
+              SProcConst (rv "res") 0,
+              SProcConst (rv "i") $ length arr
             ],
           (Block "loop_begin")
-            [ SProcBranch (Var "i") (Lbl "loop_body") (Lbl "return")
+            [ SProcBranch (rv "i") (Lbl "loop_body") (Lbl "return")
             ],
           (Block "loop_body")
-            [ SProcCopySub (Var "ONE") [Var "i"],
-              SProcConst (ArrayTargetVar "a") 0,
-              SProcArrayGet (Var "a") (Var "i"),
-              SProcCopyAdd (ArrayTargetVar "a") [Var "res"],
+            [ SProcCopySub (rv "ONE") [rv "i"],
+              SProcConst (SP.RefArrayValue $ rv "a") 0,
+              SProcArrayGet (rv "a") (rv "i"),
+              SProcCopyAdd (SP.RefArrayValue $ rv "a") [rv "res"],
               SProcGoto (Lbl "loop_begin")
             ],
           (Block "return")
-            [SProcReturn [Var "res"]]
+            [SProcReturn [rv "res"]]
         ],
       (Function "inc_all" [("a", TyArray TyInt $ length arr)] [TyArray TyInt $ length arr])
         [ (Block "init")
-            [ SProcConst (Var "ONE") 1,
-              SProcConst (Var "i") $ length arr
+            [ SProcConst (rv "ONE") 1,
+              SProcConst (rv "i") $ length arr
             ],
           (Block "loop_begin")
-            [ SProcBranch (Var "i") (Lbl "loop_body") (Lbl "return") ],
+            [ SProcBranch (rv "i") (Lbl "loop_body") (Lbl "return") ],
           (Block "loop_body")
-            [ SProcCopySub (Var "ONE") [Var "i"],
-              SProcConst (ArrayTargetVar "a") 0,
-              SProcArrayGet (Var "a") (Var "i"),
-              SProcCopyAdd (Var "ONE") [ArrayTargetVar "a"],
-              SProcArraySet (Var "a") (Var "i"),
+            [ SProcCopySub (rv "ONE") [rv "i"],
+              SProcConst (SP.RefArrayValue $ rv "a") 0,
+              SProcArrayGet (rv "a") (rv "i"),
+              SProcCopyAdd (rv "ONE") [SP.RefArrayValue $ rv "a"],
+              SProcArraySet (rv "a") (rv "i"),
               SProcGoto (Lbl "loop_begin")
             ],
           (Block "return")
-            [ SProcReturn [Var "a"] ]
+            [ SProcReturn [rv "a"] ]
         ]
     ]
     where
         initElem :: Int -> Int -> [SafeProc]
         initElem idx value = 
-            [ SProcConst (Var "i") idx,
-              SProcConst (ArrayTargetVar "a") value,
-              SProcArraySet (Var "a") (Var "i")
+            [ SProcConst (rv "i") idx,
+              SProcConst (SP.RefArrayValue $ rv "a") value,
+              SProcArraySet (rv "a") (rv "i")
             ]
 
 testSumArray :: [Int] -> Int -> Test

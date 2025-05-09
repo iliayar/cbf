@@ -5,22 +5,25 @@ import Executer (execute)
 import Test.HUnit
 import qualified UncheckedInsts
 import UncheckedInstsExt (Lbl (..), UncheckedInstExt (..), Var (..))
-import qualified UncheckedInstsExt
+import qualified UncheckedInstsExt as UIE
 
 evaluate :: [[UncheckedInstExt]] -> IO [Int]
-evaluate program = execute $ BasicExt.convert $ UncheckedInsts.convert $ UncheckedInstsExt.convert program
+evaluate program = execute $ BasicExt.convert $ UncheckedInsts.convert $ UIE.convert program
+
+rv :: Int -> UIE.Ref
+rv n = UIE.RefVar $ Var n
 
 mult :: Int -> Int -> [[UncheckedInstExt]]
 mult n m =
-  [ [ InsExtConst (Var 0) n,
-      InsExtConst (Var 1) m,
-      InsExtConst (Var 2) 1,
-      InsExtConst (Var 3) 0,
+  [ [ InsExtConst (rv 0) n,
+      InsExtConst (rv 1) m,
+      InsExtConst (rv 2) 1,
+      InsExtConst (rv 3) 0,
       InsExtGoto (Lbl 1)
     ],
-    [InsExtBranch (Var 0) (Lbl 2) Exit],
-    [ InsExtCopyAdd (Var 1) [Var 3],
-      InsExtCopySub (Var 2) [Var 0],
+    [InsExtBranch (rv 0) (Lbl 2) Exit],
+    [ InsExtCopyAdd (rv 1) [rv 3],
+      InsExtCopySub (rv 2) [rv 0],
       InsExtGoto (Lbl 1)
     ]
   ]
@@ -35,27 +38,27 @@ sumArray :: [Int] -> [[UncheckedInstExt]]
 sumArray arr =
   let inits = concat $ zipWith initElem [0..] arr in
   [ inits ++ [
-      InsExtConst (Var 0) 0,
-      InsExtConst (Var 1) (length arr),
+      InsExtConst (rv 0) 0,
+      InsExtConst (rv 1) (length arr),
       InsExtGoto (Lbl 1)
     ],
-    [ InsExtBranch (Var 1) (Lbl 2) Exit
+    [ InsExtBranch (rv 1) (Lbl 2) Exit
     ],
     [
-      InsExtConst (Var 2) 1,
-      InsExtCopySub (Var 2) [Var 1],
-      InsExtConst (ArrTargetVar 3 1) 0,
-      InsExtArrayGet (Var 3) (Var 1) 1,
-      InsExtCopyAdd (ArrTargetVar 3 1) [Var 0],
+      InsExtConst (rv 2) 1,
+      InsExtCopySub (rv 2) [rv 1],
+      InsExtConst (UIE.RefArrayValue (rv 3) 1) 0,
+      InsExtArrayGet (rv 3) (rv 1) 1,
+      InsExtCopyAdd (UIE.RefArrayValue (rv 3) 1) [rv 0],
       InsExtGoto (Lbl 1)
     ]
   ]
   where
     initElem :: Int -> Int -> [UncheckedInstExt]
     initElem idx val =
-      [ InsExtConst (Var 1) idx,
-        InsExtConst (ArrTargetVar 3 1) val,
-        InsExtArraySet (Var 3) (Var 1) 1
+      [ InsExtConst (rv 1) idx,
+        InsExtConst (UIE.RefArrayValue (rv 3) 1) val,
+        InsExtArraySet (rv 3) (rv 1) 1
       ]
 
 testSumArray :: [Int] -> Int -> Test

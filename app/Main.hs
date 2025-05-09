@@ -21,38 +21,48 @@ evaluate program = do
   putStrLn ""
   putStrLn $ "Memory: " ++ show mem
 
-fact :: Int -> Program
-fact n =
-  Program
-    [ (Function "main" [] [])
-        [ StmtAssgn (Var "res") (ExprConst 0),
-          StmtAllocateArray (Var "arr") 5,
-          StmtAssgnArray (Var "arr") (ExprConst 0) (ExprConst 1),
-          StmtAssgnArray (Var "arr") (ExprConst 1) (ExprConst 2),
-          StmtAssgnArray (Var "arr") (ExprConst 2) (ExprConst 3),
-          StmtAssgnArray (Var "arr") (ExprConst 3) (ExprConst 4),
-          StmtAssgnArray (Var "arr") (ExprConst 4) (ExprConst 5),
-          StmtAssgn (Var "arr") (ExprCall (Func "inc_all") [ExprVar $ Var "arr"]),
-          StmtAssgn (Var "res") (ExprCall (Func "sum") [ExprVar $ Var "arr"])
-        ],
-      (Function "inc_all" [("arr", TyArray 5)] [TyArray 5])
-        [ StmtAssgn (Var "i") (ExprConst 5),
-          StmtWhile (ExprVar $ Var "i")
-            [ StmtAssgn (Var "i") (ExprSub (ExprVar $ Var "i") (ExprConst 1)),
-              StmtAssgnArray (Var "arr") (ExprVar $ Var "i") (ExprAdd (ExprArrayGet (Var "arr") (ExprVar $ Var "i")) (ExprConst 1))
-            ],
-          StmtReturn [ExprVar $ Var "arr"]
-        ],
-      (Function "sum" [("arr", TyArray 5)] [TyInt])
-        [ StmtAssgn (Var "i") (ExprConst 5),
-          StmtAssgn (Var "res") (ExprConst 0),
-          StmtWhile (ExprVar $ Var "i")
-            [ StmtAssgn (Var "i") (ExprSub (ExprVar $ Var "i") (ExprConst 1)),
-              StmtAssgn (Var "res") (ExprAdd (ExprVar $ Var "res") (ExprArrayGet (Var "arr") (ExprVar $ Var "i")))
-            ],
-          StmtReturn [ExprVar $ Var "res"]
-        ]
-    ]
+-- fact :: Int -> Program
+-- fact n =
+--   Program
+--     [ (Function "main" [] [])
+--         [ StmtAssgn (Var "res") (ExprConst 0),
+--           StmtAllocateArray (Var "arr") 5,
+--           StmtAssgnArray (Var "arr") (ExprConst 0) (ExprConst 1),
+--           StmtAssgnArray (Var "arr") (ExprConst 1) (ExprConst 2),
+--           StmtAssgnArray (Var "arr") (ExprConst 2) (ExprConst 3),
+--           StmtAssgnArray (Var "arr") (ExprConst 3) (ExprConst 4),
+--           StmtAssgnArray (Var "arr") (ExprConst 4) (ExprConst 5),
+--           StmtAssgn (Var "arr") (ExprCall (Func "inc_all") [ExprVar $ Var "arr"]),
+--           StmtAssgn (Var "res") (ExprCall (Func "sum") [ExprVar $ Var "arr"])
+--         ],
+--       (Function "inc_all" [("arr", TyArray 5)] [TyArray 5])
+--         [ StmtAssgn (Var "i") (ExprConst 5),
+--           StmtWhile (ExprVar $ Var "i")
+--             [ StmtAssgn (Var "i") (ExprSub (ExprVar $ Var "i") (ExprConst 1)),
+--               StmtAssgnArray (Var "arr") (ExprVar $ Var "i") (ExprAdd (ExprArrayGet (Var "arr") (ExprVar $ Var "i")) (ExprConst 1))
+--             ],
+--           StmtReturn [ExprVar $ Var "arr"]
+--         ],
+--       (Function "sum" [("arr", TyArray 5)] [TyInt])
+--         [ StmtAssgn (Var "i") (ExprConst 5),
+--           StmtAssgn (Var "res") (ExprConst 0),
+--           StmtWhile (ExprVar $ Var "i")
+--             [ StmtAssgn (Var "i") (ExprSub (ExprVar $ Var "i") (ExprConst 1)),
+--               StmtAssgn (Var "res") (ExprAdd (ExprVar $ Var "res") (ExprArrayGet (Var "arr") (ExprVar $ Var "i")))
+--             ],
+--           StmtReturn [ExprVar $ Var "res"]
+--         ]
+--     ]
+
+
+-- example :: Program
+-- example = 
+--   Program
+--     [ (Function "main" [] [])
+--         [
+--           StmtAllocate (Var "s")
+--         ]
+--     ]
 
 main :: IO ()
 main = do

@@ -65,14 +65,23 @@ import Control.Monad (forM_)
 
 -- | 0  | 1    | 2    | ...
 -- | pc | tmpa | tmpb | ...
-data Var = ArrTargetVar Int Int | Var Int | Pc | TmpA | TmpB
+data Var = Var Int | Pc | TmpA | TmpB
+
+data Ref = RefVar Var | RefArrayValue Ref Int
 
 convertVar :: Var -> UI.Var
-convertVar (ArrTargetVar i s) = UI.arrayTargetVar (convertVar $ Var i) s
 convertVar (Var i) = UI.Var $ i + 3
 convertVar Pc = UI.Var 0
 convertVar TmpA = UI.Var 1
 convertVar TmpB = UI.Var 2
+
+convertRef :: Ref -> UI.Var
+convertRef (RefVar v) = convertVar v
+convertRef (RefArrayValue ref s) = UI.arrayTargetVar (convertRef ref) s
+
+-- mkArrTargetVar :: Var -> Int -> Var
+-- mkArrTargetVar (Var i) s = UI.arrayTargetVar (UI.Var i) s
+-- mkArrTargetVar _ _ = error "mkArrTargetVar allows only Var"
 
 data Lbl = Lbl Int | Exit
 
@@ -82,16 +91,16 @@ transLbl Exit = 0
 
 data UncheckedInstExt
   = InsExtGoto Lbl
-  | InsExtConst Var Int
-  | InsExtCopyAdd Var [Var]
-  | InsExtCopySub Var [Var]
-  | InsExtBranch Var Lbl Lbl
-  | InsExtRead Var
-  | InsExtWrite Var
+  | InsExtConst Ref Int
+  | InsExtCopyAdd Ref [Ref]
+  | InsExtCopySub Ref [Ref]
+  | InsExtBranch Ref Lbl Lbl
+  | InsExtRead Ref
+  | InsExtWrite Ref
   | InsExtIntrinsic [UncheckedInst]
-  | InsExtArrayCopy Var Var Int Int
-  | InsExtArrayGet Var Var Int
-  | InsExtArraySet Var Var Int
+  | InsExtArrayCopy Ref Ref Int Int
+  | InsExtArrayGet Ref Ref Int
+  | InsExtArraySet Ref Ref Int
 
 convert :: [[UncheckedInstExt]] -> [UncheckedInst]
 convert = convertBlocks
@@ -101,40 +110,40 @@ convert = convertBlocks
       [ InstConst (convertVar TmpA) (transLbl l),
         InstMoveAdd (convertVar TmpA) [convertVar Pc]
       ]
-    convert' (InsExtConst var n) = [InstConst (convertVar var) n]
-    convert' (InsExtCopyAdd v vs) =
+    convert' (InsExtConst var n) = [InstConst (convertRef var) n]
+    convert' (InsExtCopyAdd r rs) =
       [ InstConst (convertVar TmpA) 0,
-        InstMoveAdd (convertVar v) (convertVar TmpA : fmap convertVar vs),
-        InstMoveAdd (convertVar TmpA) [convertVar v]
+        InstMoveAdd (convertRef r) (convertVar TmpA : fmap convertRef rs),
+        InstMoveAdd (convertVar TmpA) [convertRef r]
       ]
-    convert' (InsExtCopySub v vs) =
+    convert' (InsExtCopySub r rs) =
       [ InstConst (convertVar TmpA) 0,
         InstConst (convertVar TmpB) 0,
-        InstMoveAdd (convertVar v) [convertVar TmpA, convertVar TmpB],
-        InstMoveAdd (convertVar TmpA) [convertVar v],
-        InstMoveSub (convertVar v) (fmap convertVar vs),
-        InstMoveAdd (convertVar TmpB) [convertVar v]
+        InstMoveAdd (convertRef r) [convertVar TmpA, convertVar TmpB],
+        InstMoveAdd (convertVar TmpA) [convertRef r],
+        InstMoveSub (convertRef r) (fmap convertRef rs),
+        InstMoveAdd (convertVar TmpB) [convertRef r]
       ]
-    convert' (InsExtBranch v thenLbl elseLbl) = mkIf v (convert' $ InsExtGoto thenLbl) (convert' $ InsExtGoto elseLbl)
-    convert' (InsExtRead v) = [InstRead (convertVar v)]
-    convert' (InsExtWrite v) = [InstWrite (convertVar v)]
+    convert' (InsExtBranch r thenLbl elseLbl) = mkIf r (convert' $ InsExtGoto thenLbl) (convert' $ InsExtGoto elseLbl)
+    convert' (InsExtRead r) = [InstRead (convertRef r)]
+    convert' (InsExtWrite r) = [InstWrite (convertRef r)]
     convert' (InsExtIntrinsic prog) = prog
-    convert' (InsExtArrayCopy fv tv sz se) =
-      fmap (\k -> InstConst (UI.arrayTargetVar' (convertVar fv) se k) 0) [0..se-1] ++
-      [ InstConst (UI.arrayTargetIdxVar (convertVar fv) se) sz,
-        InstArrCopy (convertVar fv) (convertVar tv) se
+    convert' (InsExtArrayCopy fr tr sz se) =
+      fmap (\k -> InstConst (UI.arrayTargetVar' (convertRef fr) se k) 0) [0..se-1] ++
+      [ InstConst (UI.arrayTargetIdxVar (convertRef fr) se) sz,
+        InstArrCopy (convertRef fr) (convertRef tr) se
       ]
-    convert' (InsExtArrayGet av iv s) =
+    convert' (InsExtArrayGet ar ir s) =
       [ InstConst (convertVar TmpA) 0,
-        InstMoveAdd (convertVar iv) [convertVar TmpA, UI.arrayTargetIdxVar (convertVar av) s],
-        InstMoveAdd (convertVar TmpA) [convertVar iv],
-        InstArrGet (convertVar av) s
+        InstMoveAdd (convertRef ir) [convertVar TmpA, UI.arrayTargetIdxVar (convertRef ar) s],
+        InstMoveAdd (convertVar TmpA) [convertRef ir],
+        InstArrGet (convertRef ar) s
       ]
-    convert' (InsExtArraySet av iv s) =
+    convert' (InsExtArraySet ar ir s) =
       [ InstConst (convertVar TmpA) 0,
-        InstMoveAdd (convertVar iv) [convertVar TmpA, UI.arrayTargetIdxVar (convertVar av) s],
-        InstMoveAdd (convertVar TmpA) [convertVar iv],
-        InstArrSet (convertVar av) s
+        InstMoveAdd (convertRef ir) [convertVar TmpA, UI.arrayTargetIdxVar (convertRef ar) s],
+        InstMoveAdd (convertVar TmpA) [convertRef ir],
+        InstArrSet (convertRef ar) s
       ]
 
     convertBlock :: [UncheckedInstExt] -> [UncheckedInst]
@@ -157,16 +166,16 @@ convert = convertBlocks
         InstMoveSub (convertVar TmpA) [convertVar Pc]
       ]
         ++ mkIf
-          Pc
+          (RefVar Pc)
           (convertBlocks' bs)
           (convertBlock b)
 
-    mkIf :: Var -> [UncheckedInst] -> [UncheckedInst] -> [UncheckedInst]
-    mkIf var thenBr elseBr =
+    mkIf :: Ref -> [UncheckedInst] -> [UncheckedInst] -> [UncheckedInst]
+    mkIf ref thenBr elseBr =
       [ InstConst (convertVar TmpA) 0,
         InstConst (convertVar TmpB) 0,
-        InstMoveAdd (convertVar var) [convertVar TmpA, convertVar TmpB],
-        InstMoveAdd (convertVar TmpB) [convertVar var],
+        InstMoveAdd (convertRef ref) [convertVar TmpA, convertVar TmpB],
+        InstMoveAdd (convertVar TmpB) [convertRef ref],
         InstConst (convertVar TmpB) 1,
         InstWhile
           (convertVar TmpA)
@@ -239,32 +248,34 @@ progToString prog = runWriter $ progToString' prog
     lblToString Exit = "#exit"
 
     instToString ::  UncheckedInstExt -> ProgWriter ()
-    instToString (InsExtConst var n) = write $ varToString var ++ " := " ++ show n
+    instToString (InsExtConst ref n) = write $ refToString ref ++ " := " ++ show n
     instToString (InsExtGoto l) = write $ "goto " ++ lblToString l
-    instToString (InsExtCopyAdd v vs) =
-        write $ intercalate "; " (fmap (\v' -> varToString v' ++ " += " ++ varToString v) vs)
-    instToString (InsExtCopySub v vs) =
-        write $ intercalate "; " (fmap (\v' -> varToString v' ++ " -= " ++ varToString v) vs)
-    instToString (InsExtBranch v thenLbl elseLbl) = do
-        write $ "if " ++ varToString v ++ " != 0 {"
+    instToString (InsExtCopyAdd r rs) =
+        write $ intercalate "; " (fmap (\r' -> refToString r' ++ " += " ++ refToString r) rs)
+    instToString (InsExtCopySub r rs) =
+        write $ intercalate "; " (fmap (\r' -> refToString r' ++ " -= " ++ refToString r) rs)
+    instToString (InsExtBranch r thenLbl elseLbl) = do
+        write $ "if " ++ refToString r ++ " != 0 {"
         withIndent $ nl >> instsToString [InsExtGoto thenLbl]
         nl >> write "} else {"
         withIndent $ nl >> instsToString  [InsExtGoto elseLbl]
         nl >> write "}"
-    instToString (InsExtRead v) = write $ "read " ++ varToString v
-    instToString (InsExtWrite v) = write $ "write " ++ varToString v
+    instToString (InsExtRead r) = write $ "read " ++ refToString r
+    instToString (InsExtWrite r) = write $ "write " ++ refToString r
     instToString (InsExtIntrinsic prog') = do
         write "Intrinsic:"
         withIndent $ nl >> UI.progToString' prog'
-    instToString (InsExtArrayCopy fv tv sz s) =
-        write $ varToString tv ++ "{" ++ show s ++ "}[0.." ++ show sz ++ "] = " ++ varToString fv ++ "[0.." ++ show sz ++ "]"
-    instToString (InsExtArrayGet av iv s) =
-        write $ "set{" ++ show s ++ "} " ++ varToString av ++ "[" ++ varToString iv ++ "]"
-    instToString (InsExtArraySet av iv s) =
-        write $  "get{" ++ show s ++ "} " ++ varToString av ++ "[" ++ varToString iv ++ "]"
+    instToString (InsExtArrayCopy fr tr sz s) =
+        write $ refToString tr ++ "{" ++ show s ++ "}[0.." ++ show sz ++ "] = " ++ refToString fr ++ "[0.." ++ show sz ++ "]"
+    instToString (InsExtArrayGet ar ir s) =
+        write $ "set{" ++ show s ++ "} " ++ refToString ar ++ "[" ++ refToString ir ++ "]"
+    instToString (InsExtArraySet ar ir s) =
+        write $  "get{" ++ show s ++ "} " ++ refToString ar ++ "[" ++ refToString ir ++ "]"
 
     varToString (Var i) = "%" ++ show i
-    varToString (ArrTargetVar i s) = "%" ++ show i ++ "{" ++ show s ++ "}.target"
     varToString Pc = "%pc"
     varToString TmpA = "%tmpa"
     varToString TmpB = "%tmpb"
+
+    refToString (RefVar v) = varToString v
+    refToString (RefArrayValue ref s) = "%" ++ refToString ref ++ "{" ++ show s ++ "}.target"
