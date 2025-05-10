@@ -2,16 +2,15 @@
 
 module Imp where
 
-import Control.Monad (forM_, replicateM, when, unless)
+import Control.Monad (forM, forM_, replicateM, unless, when)
 import qualified Control.Monad.State as ST
 import Data.List (intercalate, intersperse)
+import qualified Data.Map as M
 import Data.Maybe (isJust, isNothing)
+import qualified Data.Set as S
 import ProgWriter
 import SafeProc (SafeProc (..))
 import qualified SafeProc as SP
-import Data.Bifunctor (second)
-import qualified Data.Set as S
-import qualified Data.Map as M
 
 -- Imperative version of SafeProc. Adds expressions:
 -- expr = Var | Const | expr '+' expr | expr '-' expr
@@ -82,17 +81,12 @@ data Stmt
   | StmtWhile Expr [Stmt]
   | StmtReturn (Maybe Expr)
   | StmtAllocate Var Ty
+  | StmtCall Func [Expr]
 
 data Function = Function String [(String, Ty)] Ty [Stmt]
 
-data Ty = TyInt | TyArray Ty Int | TyStruct [(String, Ty)] | TyVoid
-    deriving (Eq, Ord)
-
-convertTy :: Ty -> SP.Ty
-convertTy TyInt = SP.TyInt
-convertTy (TyArray ty n) = SP.TyArray (convertTy ty) n
-convertTy (TyStruct fs) = SP.TyStruct $ fmap (second convertTy) fs
-convertTy TyVoid = SP.TyVoid
+data Ty = TyInt | TyArray Ty Int | TyStruct [(String, Ty)] | TyVoid | TyAlias String
+  deriving (Eq, Ord)
 
 getArrayElemTy :: Ty -> Ty
 getArrayElemTy (TyArray ty _) = ty
@@ -100,7 +94,7 @@ getArrayElemTy _ = undefined
 
 data Ref = RefVar Var | RefArray Ref Expr | RefStructField Ref String
 
-newtype Program = Program [Function]
+data Program = Program [(String, Ty)] [Function]
 
 data ConverterState = ConverterState
   { cCurrentBody :: [SP.Block],
@@ -112,10 +106,27 @@ data ConverterState = ConverterState
     cExprStack :: [SP.Ref],
     cTypeContext :: M.Map String Ty,
     cFuncTys :: M.Map String ([Ty], Ty),
-    cTmpVarTys :: M.Map SP.Var Ty
+    cTmpVarTys :: M.Map SP.Var Ty,
+    cTypeAliases :: M.Map String Ty
   }
 
 type Converter = ST.State ConverterState
+
+convertTy :: Ty -> Converter SP.Ty
+convertTy TyInt = return SP.TyInt
+convertTy (TyArray ty n) = do
+  ty' <- convertTy ty
+  return $ SP.TyArray ty' n
+convertTy (TyStruct fs) = do
+  fs' <- forM fs $ \(name, ty) -> do
+    ty' <- convertTy ty
+    return (name, ty')
+  return $ SP.TyStruct fs'
+convertTy TyVoid = return SP.TyVoid
+convertTy (TyAlias name) = do
+  ConverterState {cTypeAliases} <- ST.get
+  let ty = cTypeAliases M.! name
+  convertTy ty
 
 allocateBlock :: Converter String
 allocateBlock = do
@@ -125,8 +136,8 @@ allocateBlock = do
 
 allocateBlock' :: String -> Converter String
 allocateBlock' prefix = do
-    lbl <- allocateBlock
-    return $ prefix ++ lbl
+  lbl <- allocateBlock
+  return $ prefix ++ lbl
 
 finishBlock :: Converter ()
 finishBlock = do
@@ -150,168 +161,184 @@ addInstructions insts = do
 
 initFreeForTy :: Ty -> Converter ()
 initFreeForTy ty = do
-    st@(ConverterState { cFreeVariables }) <- ST.get
-    unless (M.member ty cFreeVariables) $ ST.put $ st { cFreeVariables = M.insert ty S.empty cFreeVariables }
+  st@(ConverterState {cFreeVariables}) <- ST.get
+  unless (M.member ty cFreeVariables) $ ST.put $ st {cFreeVariables = M.insert ty S.empty cFreeVariables}
 
 maybeAddAlloc :: SP.Var -> Ty -> Converter ()
 maybeAddAlloc var ty@(TyArray _ _) = do
-    addInstructions [ SProcAlloc var $ convertTy ty ]
+  ty' <- convertTy ty
+  addInstructions [SProcAlloc var ty']
 maybeAddAlloc var ty@(TyStruct _) = do
-    addInstructions [ SProcAlloc var $ convertTy ty ]
+  ty' <- convertTy ty
+  addInstructions [SProcAlloc var ty']
+maybeAddAlloc var (TyAlias name) = do
+  ConverterState { cTypeAliases } <- ST.get
+  maybeAddAlloc var (cTypeAliases M.! name)
 maybeAddAlloc _ _ = return ()
 
 getTmpVarTy :: SP.Var -> Converter Ty
 getTmpVarTy var = do
-    ConverterState { cTmpVarTys } <- ST.get
-    return $ cTmpVarTys M.! var
+  ConverterState {cTmpVarTys} <- ST.get
+  return $ cTmpVarTys M.! var
 
 acquireTmpVar :: Ty -> Converter SP.Ref
 acquireTmpVar ty = do
-    initFreeForTy ty
-    st@(ConverterState { cFreeVariables, cTmpVariablesCnt, cExprStack, cTmpVarTys }) <- ST.get
-    let freeVars = cFreeVariables M.! ty
-    case S.lookupMin freeVars of
-        Just var ->  do
-            ST.put $ st {
-                cExprStack = SP.RefVar var : cExprStack,
-                cFreeVariables = M.insert ty (S.delete var freeVars) cFreeVariables
-            }
-            return $ SP.RefVar var
-        Nothing -> do
-            let var = SP.Var $ "$" ++ show cTmpVariablesCnt
-            ST.put $ st {
-                cTmpVariablesCnt = cTmpVariablesCnt + 1,
-                cExprStack = SP.RefVar var : cExprStack,
-                cTmpVarTys = M.insert var ty cTmpVarTys
-            }
-            maybeAddAlloc var ty
-            return $ SP.RefVar var
+  initFreeForTy ty
+  st@(ConverterState {cFreeVariables, cTmpVariablesCnt, cExprStack, cTmpVarTys}) <- ST.get
+  let freeVars = cFreeVariables M.! ty
+  case S.lookupMin freeVars of
+    Just var -> do
+      ST.put $
+        st
+          { cExprStack = SP.RefVar var : cExprStack,
+            cFreeVariables = M.insert ty (S.delete var freeVars) cFreeVariables
+          }
+      return $ SP.RefVar var
+    Nothing -> do
+      let var = SP.Var $ "$" ++ show cTmpVariablesCnt
+      ST.put $
+        st
+          { cTmpVariablesCnt = cTmpVariablesCnt + 1,
+            cExprStack = SP.RefVar var : cExprStack,
+            cTmpVarTys = M.insert var ty cTmpVarTys
+          }
+      maybeAddAlloc var ty
+      return $ SP.RefVar var
 
 popTmpVar :: Converter SP.Ref
 popTmpVar = do
-    st@(ConverterState { cExprStack }) <- ST.get
-    case cExprStack of
-        [] -> error "Trying to pop from empty stack"
-        (ref : stack') -> do
-            ST.put $ st { cExprStack = stack' }
-            addFreeVar ref
-            return ref
+  st@(ConverterState {cExprStack}) <- ST.get
+  case cExprStack of
+    [] -> error "Trying to pop from empty stack"
+    (ref : stack') -> do
+      ST.put $ st {cExprStack = stack'}
+      addFreeVar ref
+      return ref
 
 pushTmpVar :: SP.Ref -> Converter ()
 pushTmpVar ref = do
-    st@(ConverterState { cExprStack }) <- ST.get
-    ST.put $ st {
-        cExprStack = ref : cExprStack
-    }
-    removeFreeVar ref
+  st@(ConverterState {cExprStack}) <- ST.get
+  ST.put $
+    st
+      { cExprStack = ref : cExprStack
+      }
+  removeFreeVar ref
 
 removeFreeVar :: SP.Ref -> Converter ()
 removeFreeVar (SP.RefVar var) = do
-    ty <- getTmpVarTy var
-    st@(ConverterState { cFreeVariables }) <- ST.get
-    let freeVars = cFreeVariables M.! ty
-    ST.put $ st {
-        cFreeVariables = M.insert ty (S.delete var freeVars) cFreeVariables
-    }
+  ty <- getTmpVarTy var
+  st@(ConverterState {cFreeVariables}) <- ST.get
+  let freeVars = cFreeVariables M.! ty
+  ST.put $
+    st
+      { cFreeVariables = M.insert ty (S.delete var freeVars) cFreeVariables
+      }
 removeFreeVar (SP.RefArrayValue ref) = removeFreeVar ref
 removeFreeVar (SP.RefStructField ref _) = removeFreeVar ref
 
 addFreeVar :: SP.Ref -> Converter ()
 addFreeVar (SP.RefVar var) = do
-    ty <- getTmpVarTy var
-    st@(ConverterState { cFreeVariables }) <- ST.get
-    let freeVars = cFreeVariables M.! ty
-    ST.put $ st {
-        cFreeVariables = M.insert ty (S.insert var freeVars) cFreeVariables
-    }
+  ty <- getTmpVarTy var
+  st@(ConverterState {cFreeVariables}) <- ST.get
+  let freeVars = cFreeVariables M.! ty
+  ST.put $
+    st
+      { cFreeVariables = M.insert ty (S.insert var freeVars) cFreeVariables
+      }
 addFreeVar (SP.RefArrayValue ref) = removeFreeVar ref
 addFreeVar (SP.RefStructField ref _) = removeFreeVar ref
 
 addVarTy' :: String -> Ty -> Converter ()
 addVarTy' name ty = do
-    st@(ConverterState { cTypeContext }) <- ST.get
-    ST.put $ st { cTypeContext = M.insert name ty cTypeContext  }
+  st@(ConverterState {cTypeContext}) <- ST.get
+  ST.put $ st {cTypeContext = M.insert name ty cTypeContext}
 
 addVarTy :: Var -> Ty -> Converter ()
 addVarTy (Var name) = addVarTy' name
 
-setNewVarTy :: Ref -> Ty -> Converter ()
-setNewVarTy (RefVar (Var name)) ty = do
-    st@(ConverterState { cTypeContext }) <- ST.get
-    case M.lookup name cTypeContext of
-        Just _ -> return ()
-        Nothing -> do
-            ST.put $ st { cTypeContext = M.insert name ty cTypeContext }
-setNewVarTy _ _ = return ()
-
-getStructFieldTy :: Ty -> String -> Ty
-getStructFieldTy (TyStruct fields) field = findField fields field
-    where
-        findField ((f, ty) : fs) f' =
-          if f == f' then ty
-          else findField fs f'
-        findField [] f = error $ "No such field: " ++ f
+getStructFieldTy :: Ty -> String -> Converter Ty
+getStructFieldTy (TyStruct fields) field = return $ findField fields field
+  where
+    findField ((f, ty) : fs) f' =
+      if f == f'
+        then ty
+        else findField fs f'
+    findField [] f = error $ "No such field: " ++ f
+getStructFieldTy (TyAlias name) field = do
+    ConverterState { cTypeAliases } <- ST.get
+    getStructFieldTy (cTypeAliases M.! name) field
 getStructFieldTy _ _ = undefined
 
 deriveRefTy :: Ref -> Converter Ty
 deriveRefTy (RefVar (Var name)) = do
-    ConverterState { cTypeContext } <- ST.get
-    return $ cTypeContext M.! name
+  ConverterState {cTypeContext} <- ST.get
+  case M.lookup name cTypeContext of
+    Nothing -> error $ "Unknown variable " ++ name
+    Just ty -> return ty
 deriveRefTy (RefArray ref _) = do
-    ty <- deriveRefTy ref
-    return $ getArrayElemTy ty
+  ty <- deriveRefTy ref
+  return $ getArrayElemTy ty
 deriveRefTy (RefStructField ref field) = do
-    ty <- deriveRefTy ref
-    return $ getStructFieldTy ty field
+  ty <- deriveRefTy ref
+  getStructFieldTy ty field
 
 addFuncTy :: String -> [Ty] -> Ty -> Converter ()
 addFuncTy name argTys retTy = do
-    st@(ConverterState { cFuncTys }) <- ST.get
-    ST.put $ st { cFuncTys = M.insert name (argTys, retTy) cFuncTys }
+  st@(ConverterState {cFuncTys}) <- ST.get
+  ST.put $ st {cFuncTys = M.insert name (argTys, retTy) cFuncTys}
 
 getSingleRetTy :: Func -> Converter Ty
 getSingleRetTy (Func name) = do
-    ConverterState { cFuncTys } <- ST.get
-    let (_, retTy) = cFuncTys M.! name
-    return retTy
+  ConverterState {cFuncTys} <- ST.get
+  let (_, retTy) = cFuncTys M.! name
+  return retTy
 
-data PreparedRef = PreparedRef {
-    ref :: SP.Ref,
+data PreparedRef = PreparedRef
+  { ref :: SP.Ref,
     focus :: Converter (),
     save :: Converter (),
     discard :: Converter ()
-}
+  }
 
 convert :: Program -> SP.Program
-convert (Program functions) =
-    let funcTys = M.fromList $ fmap extractFuncTy functions in
-    SP.Program $ fmap (convertFunction funcTys) functions
+convert (Program typeAliases functions) =
+  let funcTys = M.fromList $ fmap extractFuncTy functions
+   in SP.Program $ fmap (convertFunction funcTys) functions
   where
     extractFuncTy :: Function -> (String, ([Ty], Ty))
     extractFuncTy (Function name args ret _) = (name, (fmap snd args, ret))
 
     convertFunction :: M.Map String ([Ty], Ty) -> Function -> SP.Function
     convertFunction funcTys (Function name args ret stmts) =
-      let (_, ConverterState {cCurrentBody}) =
-            ST.runState (addArgs args >> convertFunction' stmts) $
-              ConverterState
-                { cCurrentBody = [],
-                  cBlocksCnt = 0,
-                  cCurrentBlockName = Nothing,
-                  cCurrentBlock = [],
-                  cExprStack = [],
-                  cFreeVariables = M.empty,
-                  cTmpVariablesCnt = 0,
-                  cTypeContext = M.empty,
-                  cFuncTys = funcTys,
-                  cTmpVarTys = M.empty
-                }
-          args' = fmap (second convertTy) args
-      in
-      let retTys = case ret of
-            TyVoid -> []
-            ty -> [convertTy ty]
-      in SP.Function name args' retTys (reverse cCurrentBody)
+      let initSt =
+            ConverterState
+              { cCurrentBody = [],
+                cBlocksCnt = 0,
+                cCurrentBlockName = Nothing,
+                cCurrentBlock = [],
+                cExprStack = [],
+                cFreeVariables = M.empty,
+                cTmpVariablesCnt = 0,
+                cTypeContext = M.empty,
+                cFuncTys = funcTys,
+                cTmpVarTys = M.empty,
+                cTypeAliases = M.fromList typeAliases
+              }
+       in let ((args', retTys), ConverterState {cCurrentBody}) =
+                ST.runState (do
+                    addArgs args
+                    convertFunction' stmts
+                    args'' <- forM args $ \(name', ty) -> do
+                        ty' <- convertTy ty
+                        return (name', ty')
+                    retTys' <- case ret of
+                        TyVoid -> return []
+                        ty' -> do
+                            ty'' <- convertTy ty'
+                            return [ty'']
+                    return (args'', retTys')
+                ) initSt
+           in SP.Function name args' retTys (reverse cCurrentBody)
 
     addArgs :: [(String, Ty)] -> Converter ()
     addArgs args = forM_ args (uncurry addVarTy')
@@ -328,47 +355,49 @@ convert (Program functions) =
 
     prepRef :: Ref -> Converter PreparedRef
     prepRef (RefVar var) = do
-        return $ PreparedRef {
-            ref = SP.RefVar $ convertVar var,
+      return $
+        PreparedRef
+          { ref = SP.RefVar $ convertVar var,
             focus = return (),
             save = return (),
             discard = return ()
-        }
+          }
     prepRef (RefArray ref' idxExpr) = do
-        PreparedRef { ref, focus, save, discard } <- prepRef ref'
-        idx <- convertExpr idxExpr
-        pushTmpVar idx
-        return $ PreparedRef {
-            ref = SP.RefArrayValue ref,
+      PreparedRef {ref, focus, save, discard} <- prepRef ref'
+      idx <- convertExpr idxExpr
+      pushTmpVar idx
+      return $
+        PreparedRef
+          { ref = SP.RefArrayValue ref,
             focus = do
-                focus
-                addInstructions [ SProcArrayGet ref idx ],
+              focus
+              addInstructions [SProcArrayGet ref idx],
             save = do
-                addInstructions [ SProcArraySet ref idx ]
-                _ <- popTmpVar
-                save,
+              addInstructions [SProcArraySet ref idx]
+              _ <- popTmpVar
+              save,
             discard = do
-                _ <- popTmpVar
-                discard
-        }
+              _ <- popTmpVar
+              discard
+          }
     prepRef (RefStructField ref' field) = do
-        PreparedRef { ref, focus, save, discard } <- prepRef ref'
-        return $ PreparedRef {
-            ref = SP.RefStructField ref field,
+      PreparedRef {ref, focus, save, discard} <- prepRef ref'
+      return $
+        PreparedRef
+          { ref = SP.RefStructField ref field,
             focus = focus,
             save = save,
             discard = discard
-        }
-
+          }
 
     convertStmt :: Stmt -> Converter ()
     convertStmt (StmtAssgn ref' expr) = do
       convertExpr' expr
       tmp <- popTmpVar
       pushTmpVar tmp
-      PreparedRef { ref, focus, save } <- prepRef ref'
+      PreparedRef {ref, focus, save} <- prepRef ref'
       focus
-      addInstructions [ SProcAssign ref tmp ]
+      addInstructions [SProcAssign ref tmp]
       save
       _ <- popTmpVar
       return ()
@@ -416,8 +445,17 @@ convert (Program functions) =
     convertStmt (StmtReturn Nothing) = do
       addInstructions [SProcReturn []]
     convertStmt (StmtAllocate var ty) = do
-        addVarTy var ty
-        addInstructions [SProcAlloc (convertVar var) $ convertTy ty]
+      addVarTy var ty
+      ty' <- convertTy ty
+      addInstructions [SProcAlloc (convertVar var) ty']
+    convertStmt (StmtCall (Func "write") [expr]) = do
+      tmp <- convertExpr expr
+      addInstructions [SProcWrite tmp]
+    convertStmt (StmtCall func args) = do
+      forM_ args convertExpr'
+      vars <- replicateM (length args) popTmpVar
+      addInstructions
+        [SProcCall (convertFunc func) (reverse vars) []]
 
     convertExpr :: Expr -> Converter SP.Ref
     convertExpr expr = do
@@ -426,13 +464,12 @@ convert (Program functions) =
 
     convertExpr' :: Expr -> Converter ()
     convertExpr' (ExprRef ref') = do
-      setNewVarTy ref' TyInt
       ty <- deriveRefTy ref'
       tmp <- acquireTmpVar ty
 
-      PreparedRef { ref, focus, discard } <- prepRef ref'
+      PreparedRef {ref, focus, discard} <- prepRef ref'
       focus
-      addInstructions [ SProcAssign tmp ref ]
+      addInstructions [SProcAssign tmp ref]
       discard
     convertExpr' (ExprConst n) = do
       tmp <- acquireTmpVar TyInt
@@ -451,13 +488,16 @@ convert (Program functions) =
       lVar <- popTmpVar
       addInstructions [SProcCopySub rVar [lVar]]
       pushTmpVar lVar
+    convertExpr' (ExprCall (Func "read") []) = do
+        tmp <- acquireTmpVar TyInt
+        addInstructions [SProcRead tmp]
     convertExpr' (ExprCall func args) = do
-        forM_ args convertExpr'
-        vars <- replicateM (length args) popTmpVar
-        ty <- getSingleRetTy func
-        tmp <- acquireTmpVar ty
-        addInstructions
-          [ SProcCall (convertFunc func) (reverse vars) [tmp] ]
+      forM_ args convertExpr'
+      vars <- replicateM (length args) popTmpVar
+      ty <- getSingleRetTy func
+      tmp <- acquireTmpVar ty
+      addInstructions
+        [SProcCall (convertFunc func) (reverse vars) [tmp]]
 
     convertVar :: Var -> SP.Var
     convertVar (Var v) = SP.Var v
@@ -469,8 +509,14 @@ progToString :: Program -> String
 progToString prog = runWriter $ progToString' prog
   where
     progToString' :: Program -> ProgWriter ()
-    progToString' (Program functions) =
+    progToString' (Program typeAliases functions) = do
+      forM_ (intersperse nl $ fmap typeAliasToString typeAliases) id
+      unless (null typeAliases) nl
       forM_ (intersperse nl $ fmap functionToString functions) id
+
+    typeAliasToString :: (String, Ty) -> ProgWriter ()
+    typeAliasToString (name, ty) =
+      write $ "typedef " ++ tyToString ty ++ " " ++ name ++ ";"
 
     argToString :: (String, Ty) -> String
     argToString (name, ty) = tyToString ty ++ " " ++ name
@@ -480,6 +526,7 @@ progToString prog = runWriter $ progToString' prog
     tyToString (TyArray ty n) = tyToString ty ++ "[" ++ show n ++ "]"
     tyToString (TyStruct fs) = "struct { " ++ unwords (fmap (\(f, ty) -> tyToString ty ++ " " ++ f ++ ";") fs) ++ " }"
     tyToString TyVoid = "void"
+    tyToString (TyAlias name) = name
 
     functionToString :: Function -> ProgWriter ()
     functionToString (Function name args ret stmts) = do
@@ -488,7 +535,7 @@ progToString prog = runWriter $ progToString' prog
       nl >> write "}"
 
     stmtsToString :: [Stmt] -> ProgWriter ()
-    stmtsToString stmts = forM_ (intersperse nl $ fmap stmtToString stmts) id
+    stmtsToString stmts = forM_ (intersperse nl $ fmap (\stmt -> stmtToString stmt >> write ";") stmts) id
 
     stmtToString :: Stmt -> ProgWriter ()
     stmtToString (StmtAssgn ref e) = do
@@ -515,7 +562,11 @@ progToString prog = runWriter $ progToString' prog
     stmtToString (StmtReturn Nothing) = do
       write "return"
     stmtToString (StmtAllocate var ty) = do
-        write $ tyToString ty ++ " " ++ varToString var
+      write $ tyToString ty ++ " " ++ varToString var
+    stmtToString (StmtCall func args) = do
+      write $ funcToString func ++ "("
+      forM_ (intersperse (write ", ") $ fmap exprToString args) id
+      write ")"
 
     varToString :: Var -> String
     varToString (Var name) = name
@@ -526,25 +577,29 @@ progToString prog = runWriter $ progToString' prog
     refToString :: Ref -> ProgWriter ()
     refToString (RefVar v) = write $ varToString v
     refToString (RefArray ref idx) = do
-        refToString ref
-        write "["
-        exprToString idx
-        write "]"
+      refToString ref
+      write "["
+      exprToString idx
+      write "]"
     refToString (RefStructField ref field) = do
-        refToString ref
-        write $ "." ++ field
+      refToString ref
+      write $ "." ++ field
 
     exprToString :: Expr -> ProgWriter ()
     exprToString (ExprRef ref) = refToString ref
     exprToString (ExprConst n) = write $ show n
     exprToString (ExprAdd l r) = do
+      write "("
       exprToString l
       write " + "
       exprToString r
+      write ")"
     exprToString (ExprSub l r) = do
+      write "("
       exprToString l
       write " - "
       exprToString r
+      write ")"
     exprToString (ExprCall func args) = do
       write $ funcToString func ++ "("
       forM_ (intersperse (write ", ") $ fmap exprToString args) id

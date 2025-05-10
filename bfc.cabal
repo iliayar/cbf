@@ -20,6 +20,8 @@ library bfc-lib
                  , data-default
                  , mtl
                  , containers
+                 , megaparsec
+                 , parser-combinators
     exposed-modules: Basic
                      Executer
                      BasicExt
@@ -29,7 +31,7 @@ library bfc-lib
                      SafeProc
                      ProgWriter
                      Imp
-                     Imp.Dsl
+                     Imp.Parser
     default-language: Haskell2010
 
 test-suite tests
@@ -51,6 +53,8 @@ executable bfc
     other-modules:
     build-depends: base ^>=4.18.2.1
                  , bfc-lib
+                 , neat-interpolation
+                 , text
 
     hs-source-dirs: app
     default-language: Haskell2010
