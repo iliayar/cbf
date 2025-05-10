@@ -1,5 +1,11 @@
-void print_array(int a[200]) {
-    int SIZE = 200;
+// Uncomment and clang rule110.c -o rule110 && ./rule110
+// #include <stdio.h>
+// void write(int c) {
+//     printf("%c", (char)c);
+// }
+
+void print_array(int a[100]) {
+    int SIZE = 100;
 
     int i = 0;
     while (SIZE - i) {
@@ -14,9 +20,16 @@ void print_array(int a[200]) {
 }
 
 int main() {
-    int SIZE = 200;
-    int cur[200];
-    int next[200];
+    int SIZE = 100;
+    int cur[100];
+    int next[100];
+
+    int i = 0;
+    while (SIZE - i) {
+        cur[i] = 0;
+        next[i] = 0;
+        i = i + 1;
+    }
 
     cur[SIZE - 12 + 1] = 0;
     cur[SIZE - 12 + 2] = 0;
@@ -68,7 +81,11 @@ int main() {
             i = i + 1;
         }
 
-        cur = next;
+        i = 0;
+        while (SIZE - i) {
+            cur[i] = next[i];
+            i = i + 1;
+        }
         iterations = iterations + 1;
     }
 }
