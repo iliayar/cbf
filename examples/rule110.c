@@ -11,8 +11,10 @@ void print_array(int a[100]) {
     while (SIZE - i) {
         if (a[i]) {
             write('#');
+            write('#');
         } else {
-            write('_');
+            write(' ');
+            write(' ');
         }
         i = i + 1;
     }
