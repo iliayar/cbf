@@ -4,8 +4,8 @@
 //     printf("%c", (char)c);
 // }
 
-void print_array(int a[50]) {
-    int SIZE = 50;
+void print_array(int a[100]) {
+    int SIZE = 100;
 
     int i = 0;
     while (SIZE - i) {
@@ -40,9 +40,9 @@ int rule110(int c0, int c1, int c2) {
 }
 
 int main() {
-    int SIZE = 50;
-    int cur[50];
-    int next[50];
+    int SIZE = 100;
+    int cur[100];
+    int next[100];
 
     int i = 0;
     while (SIZE - i) {
@@ -51,26 +51,28 @@ int main() {
         i = i + 1;
     }
 
-    cur[SIZE - 12 + 1] = 0;
-    cur[SIZE - 12 + 2] = 0;
-    cur[SIZE - 12 + 2] = 0;
-    cur[SIZE - 12 + 3] = 1;
-    cur[SIZE - 12 + 4] = 1;
-    cur[SIZE - 12 + 5] = 1;
-    cur[SIZE - 12 + 6] = 0;
-    cur[SIZE - 12 + 7] = 1;
-    cur[SIZE - 12 + 8] = 1;
-    cur[SIZE - 12 + 9] = 1;
+    cur[SIZE - 10 + 0] = 0;
+    cur[SIZE - 10 + 1] = 0;
+    cur[SIZE - 10 + 2] = 0;
+    cur[SIZE - 10 + 3] = 1;
+    cur[SIZE - 10 + 4] = 1;
+    cur[SIZE - 10 + 5] = 1;
+    cur[SIZE - 10 + 6] = 0;
+    cur[SIZE - 10 + 7] = 1;
+    cur[SIZE - 10 + 8] = 1;
+    cur[SIZE - 10 + 9] = 1;
     int iterations = 0;
 
     while (SIZE - iterations) {
         print_array(cur);
 
         i = 1;
+        next[0] = rule110(0, cur[0], cur[1]);
         while (SIZE - 1 - i) {
             next[i] = rule110(cur[i - 1], cur[i], cur[i + 1]);
             i = i + 1;
         }
+        next[SIZE - 1] = rule110(cur[SIZE - 2], cur[SIZE - 1], 0);
 
         i = 0;
         while (SIZE - i) {
