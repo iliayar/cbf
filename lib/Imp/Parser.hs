@@ -10,6 +10,8 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Control.Monad.State.Strict
 import Data.Maybe (isJust)
+import qualified Data.Char
+import qualified Text.Megaparsec.Char.Lexer as L
 
 data ImpState = ImpState {
     stTypeDefs :: M.Map String Ty,
@@ -40,7 +42,7 @@ instance ShowErrorComponent Custom where
     showErrorComponent NoMain = "main function is node defined"
 
 ws :: ImpParser ()
-ws = void (many (oneOf " \n\t"))
+ws = L.space space1 (L.skipLineComment "//") (L.skipBlockComment "/*" "*/")
 
 identifier :: ImpParser String
 identifier = (:) <$> firstChar <*> many nonFirstChar
@@ -149,10 +151,6 @@ funcDecl = do
             return $ Just func
 
 
--- data Expr
---   | ExprAdd Expr Expr
---   | ExprSub Expr Expr
-
 funcCall :: ImpParser (Func, [Expr])
 funcCall = do
     o <- getOffset
@@ -160,7 +158,7 @@ funcCall = do
     args <- char '(' *> ws *> sepBy (expr <* ws) (char ',' <* ws) <* char ')'
 
     ImpState { stFuncDecls, stFuncDeclsWithoutBody } <- get
-    unless (M.member ident stFuncDecls 
+    unless (M.member ident stFuncDecls
         || M.member ident stFuncDeclsWithoutBody
         || ident == "read" || ident == "write") $
         impFail o $ UndeclaredFunction ident
@@ -176,7 +174,7 @@ expr = makeExprParser (ws *> term <* ws) table
         binary :: String -> (Expr -> Expr -> Expr) -> Operator ImpParser Expr
         binary s f = InfixL $ f <$ string s
 
-        table = 
+        table =
           [ [ binary "+" ExprAdd,
               binary "-" ExprSub
             ]
@@ -184,12 +182,26 @@ expr = makeExprParser (ws *> term <* ws) table
 
         term = choice
           [ ExprConst <$> int,
+            ExprConst . Data.Char.ord <$> charLit,
             paren,
             try exprCall,
             ExprRef <$> impRef
           ]
 
         paren = char '(' *> ws *> expr <* ws <* char ')'
+
+        charLit :: ImpParser Char
+        charLit = do
+            ch <- char '\'' *> anySingle
+            case ch of 
+                '\\' -> do
+                    specialCh <- anySingle <* char '\''
+                    case specialCh of
+                        'n' -> return '\n'
+                        't' -> return '\t'
+                        'r' -> return '\r'
+                        _ -> error $ "Unknown special symbol " ++ [specialCh]
+                _ -> char '\'' >> return ch
 
 maybeArrRef :: Ref -> ImpParser (Maybe Ref)
 maybeArrRef r = do
@@ -334,14 +346,14 @@ moveMainToTop fs = do
 
 program :: ImpParser Program
 program = do
-    decls <- many $ decl <* ws
+    decls <- ws *> many (decl <* ws)
     let (typedefs, funcs) = splitDecls decls
     funcs' <- moveMainToTop funcs
     return $ Program typedefs funcs'
 
-parseProgram :: String -> IO (Maybe Program)
-parseProgram s =
-    let (res, _) = runState (runParserT program "" s) ImpState {
+parseProgram :: String -> String -> IO (Maybe Program)
+parseProgram filename s =
+    let (res, _) = runState (runParserT program filename s) ImpState {
         stTypeDefs = M.empty,
         stFuncDeclsWithoutBody = M.empty,
         stFuncDecls = M.empty,

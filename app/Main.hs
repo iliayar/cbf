@@ -41,6 +41,7 @@ example = T.unpack
     }
 
     void main() {
+        write('E'); write('n'); write('t'); write('e'); write('r'); write(':'); write(' '); write('\n');
         foo(read() + 1);
     }
   |]
@@ -48,33 +49,30 @@ example = T.unpack
 main :: IO ()
 main = do
   args <- getArgs
-  case args of
-    [] -> do
-      procImp' <- parseProgram example
-      case procImp' of
-        Nothing -> return ()
-        Just procImp -> do
-          -- let procImp = example
-          putStrLn "Imp:"
-          putStrLn $ Imp.progToString procImp
-          let procSafeProc = Imp.convert procImp
-          putStrLn "SafeProc:"
-          putStrLn $ SafeProc.progToString procSafeProc
-          let procProc = SafeProc.convert procSafeProc
-          -- putStrLn "UncheckedProc:"
-          -- putStrLn $ UncheckedProc.progToString procProc
-          let procInstsExt = UncheckedProc.convert procProc
-          -- putStrLn "UncheckedInstExt:"
-          -- putStrLn $ UncheckedInstsExt.progToString procInstsExt
-          let procInsts = UncheckedInstsExt.convert procInstsExt
-          -- putStrLn "UncheckedInst:"
-          -- putStrLn $ UncheckedInsts.progToString procInsts
-          let procBfExt = BasicExt.optimize $ UncheckedInsts.convert procInsts
-          -- putStrLn "BasicExt:"
-          -- putStrLn $ BasicExt.progToString procBfExt
-          let procBf = BasicExt.convert procBfExt
-          -- evaluate $ doubleCellSize procBf
-          evaluate procBf
-    filename : _ -> do
-      content <- readFile filename
-      evaluate $ bfFromString content
+  program <- case args of
+    [] -> parseProgram "<example>" example
+    "-c" : filename : _ -> readFile filename >>= parseProgram filename
+    _ -> return Nothing
+  case program of
+    Nothing -> return ()
+    Just procImp -> do
+      putStrLn "Imp:"
+      putStrLn $ Imp.progToString procImp
+      let procSafeProc = Imp.convert procImp
+      putStrLn "SafeProc:"
+      putStrLn $ SafeProc.progToString procSafeProc
+      let procProc = SafeProc.convert procSafeProc
+      -- putStrLn "UncheckedProc:"
+      -- putStrLn $ UncheckedProc.progToString procProc
+      let procInstsExt = UncheckedProc.convert procProc
+      -- putStrLn "UncheckedInstExt:"
+      -- putStrLn $ UncheckedInstsExt.progToString procInstsExt
+      let procInsts = UncheckedInstsExt.convert procInstsExt
+      -- putStrLn "UncheckedInst:"
+      -- putStrLn $ UncheckedInsts.progToString procInsts
+      let procBfExt = BasicExt.optimize $ UncheckedInsts.convert procInsts
+      -- putStrLn "BasicExt:"
+      -- putStrLn $ BasicExt.progToString procBfExt
+      let procBf = BasicExt.convert procBfExt
+      -- evaluate $ doubleCellSize procBf
+      evaluate procBf
