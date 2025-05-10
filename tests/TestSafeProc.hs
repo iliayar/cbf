@@ -29,14 +29,21 @@ mult n m =
   Program
     [ (Function "main" [] [])
         [ (Block "init")
-            [ SProcConst (rv "a") n,
+            [ SProcAlloc (Var "a") TyInt,
+              SProcAlloc (Var "b") TyInt,
+              SProcAlloc (Var "c") TyInt,
+              SProcConst (rv "a") n,
               SProcConst (rv "b") m,
               SProcCall (Func "mult") [rv "a", rv "b"] [rv "c"]
             ]
         ],
       (Function "mult" [("a", TyInt), ("b", TyInt)] [TyInt])
         [ (Block "init")
-            [ SProcConst (rv "ONE") 1,
+            [ SProcAlloc (Var "ONE") TyInt,
+              SProcAlloc (Var "res") TyInt,
+              SProcAlloc (Var "a") TyInt,
+              SProcAlloc (Var "b") TyInt,
+              SProcConst (rv "ONE") 1,
               SProcConst (rv "res") 0
             ],
           (Block "loop_begin")
@@ -57,13 +64,18 @@ fact n =
   Program
     [ (Function "main" [] [])
       [ (Block "init")
-        [ SProcConst (rv "a") n
+        [ SProcAlloc (Var "a") TyInt
+        , SProcConst (rv "a") n
         , SProcCall (Func "fact") [rv "a"] [rv "a"]
         ]
       ]
     , (Function "mult" [("a", TyInt), ("b", TyInt)] [TyInt])
         [ (Block "init")
-          [ SProcConst (rv "ONE") 1
+          [ SProcAlloc (Var "ONE") TyInt
+          , SProcAlloc (Var "res") TyInt
+          , SProcAlloc (Var "a") TyInt
+          , SProcAlloc (Var "b") TyInt
+          , SProcConst (rv "ONE") 1
           , SProcConst (rv "res") 0
           , SProcGoto (Lbl "loop_begin")
           ]
@@ -83,7 +95,10 @@ fact n =
         [ SProcBranch (rv "a") (Lbl "step") (Lbl "base")
         ]
       , (Block "step")
-        [ SProcConst (rv "ONE") 1
+        [ SProcAlloc (Var "ONE") TyInt
+        , SProcAlloc (Var "b") TyInt
+        , SProcAlloc (Var "a") TyInt
+        , SProcConst (rv "ONE") 1
         , SProcConst (rv "b") 0
         , SProcCopyAdd (rv "a") [rv "b"]
         , SProcCopySub (rv "ONE") [rv "b"]
@@ -117,7 +132,9 @@ sumArray arr =
   Program
     [ (Function "main" [] [])
         [ (Block "init") $
-            [ SProcConst (rv "b") 0,
+            [ SProcAlloc (Var "b") TyInt,
+              SProcAlloc (Var "i") TyInt,
+              SProcConst (rv "b") 0,
               SProcAlloc (Var "a") $ TyArray TyInt $ length arr
             ] ++ inits ++
             [ SProcCall (Func "inc_all") [rv "a"] [rv "a"],
@@ -125,7 +142,10 @@ sumArray arr =
         ],
       (Function "sum" [("a", TyArray TyInt $ length arr)] [TyInt])
         [ (Block "init")
-            [ SProcConst (rv "ONE") 1,
+            [ SProcAlloc (Var "ONE") TyInt,
+              SProcAlloc (Var "res") TyInt,
+              SProcAlloc (Var "i") TyInt,
+              SProcConst (rv "ONE") 1,
               SProcConst (rv "res") 0,
               SProcConst (rv "i") $ length arr
             ],
@@ -144,7 +164,9 @@ sumArray arr =
         ],
       (Function "inc_all" [("a", TyArray TyInt $ length arr)] [TyArray TyInt $ length arr])
         [ (Block "init")
-            [ SProcConst (rv "ONE") 1,
+            [ SProcAlloc (Var "ONE") TyInt,
+              SProcAlloc (Var "i") TyInt,
+              SProcConst (rv "ONE") 1,
               SProcConst (rv "i") $ length arr
             ],
           (Block "loop_begin")

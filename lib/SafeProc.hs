@@ -212,9 +212,6 @@ recordVar' (RefVar (Var name)) ty = do
 recordVar' (RefArrayValue _) _ = return ()
 recordVar' (RefStructField _ _) _ = return ()
 
-recordVar :: Ref -> Converter ()
-recordVar ref = recordVar' ref TyInt
-
 data ResolverState = ResolverState
   { rBlocksMapping :: M.Map (String, String) Int,
     rFunctionsMapping :: M.Map String Int,
@@ -409,49 +406,39 @@ convert proc =
         lbl' <- resolveLbl lbl
         return [ProcGoto lbl']
     convertInst' (SProcBranch ref thenLbl elseLbl) = do
-      recordVar ref
       addInstructions $ do
         ref' <- resolveRef ref
         thenLbl' <- resolveLbl thenLbl
         elseLbl' <- resolveLbl elseLbl
         return [ProcBranch ref' thenLbl' elseLbl']
     convertInst' (SProcConst ref n) = do
-      recordVar ref
       addInstructions $ do
         (ref', ty) <- resolveRefWithTy ref
         unless (isVarTy ty) $ error "Const can be used only with VarTy"
         return [ProcConst ref' n]
     convertInst' (SProcCopyAdd ref refs) = do
-      recordVar ref
-      forM_ refs recordVar
       addInstructions $ do
         (ref', ty) <- resolveRefWithTy ref
         refs' <- forM refs resolveRefWithTy
         unless (isVarTy ty && all (isVarTy . snd) refs') $ error "CopyAdd can be used only with VarTy"
         return [ProcCopyAdd ref' (fmap fst refs')]
     convertInst' (SProcCopySub ref refs) = do
-      recordVar ref
-      forM_ refs recordVar
       addInstructions $ do
         (ref', ty) <- resolveRefWithTy ref
         refs' <- forM refs resolveRefWithTy
         unless (isVarTy ty && all (isVarTy . snd) refs') $ error "CopySub can be used only with VarTy"
         return [ProcCopySub ref' (fmap fst refs')]
     convertInst' (SProcRead ref) = do
-      recordVar ref
       addInstructions $ do
         (ref', ty) <- resolveRefWithTy ref
         unless (isVarTy ty) $ error "Read can be used only with VarTy"
         return [ProcRead ref']
     convertInst' (SProcWrite ref) = do
-      recordVar ref
       addInstructions $ do
         (ref', ty) <- resolveRefWithTy ref
         unless (isVarTy ty) $ error "Read can be used only with VarTy"
         return [ProcWrite ref']
     convertInst' (SProcCall func@(Func name) argRefs retRefs) = do
-      forM_ argRefs recordVar
-      forM_ retRefs recordVar
       addInstructions $ do
         ResolvedFunc {rfIdx, rfArgTys, rfRetTys} <- resolveFunc func
         unless (length rfArgTys == length argRefs) $
@@ -490,7 +477,6 @@ convert proc =
         retAssgns <- concat <$> forM (zip retRefs' calleeRets) (uncurry makeAssignment')
         return $ argAssgns ++ [ProcCall (UP.Func rfIdx) shiftSize] ++ retAssgns
     convertInst' (SProcReturn retRefs) = do
-        forM_ retRefs recordVar
         addInstructions $ do
             currentFunc <- resolveCurrentFunction
             ResolvedFunc { rfRetTys } <- resolveFunc (Func currentFunc)
@@ -506,14 +492,9 @@ convert proc =
             retAssgns <- concat <$> forM (zip rets retRefs) (uncurry makeAssignment)
             return $ retAssgns ++ [ ProcGoto UP.Ret ]
     convertInst' (SProcAssign dr sr) = do
-        -- FIXME: Actually its wrong to record these vars as VarTy
-        -- Or maybe OK
-        recordVar dr
-        recordVar sr
         addInstructions $ makeAssignment dr sr
     convertInst' (SProcAlloc var ty) = recordVar' (RefVar var) ty
     convertInst' (SProcArrayGet ar ir) = do
-        recordVar ir
         addInstructions $ do
             (ir', iTy) <- resolveRefWithTy ir
             (ar', aTy) <- resolveRefWithTy ar
@@ -521,7 +502,6 @@ convert proc =
             unless (isArrayTy aTy) $ error "Array in ArrayGet must be of type VarTy"
             return [ ProcArrayGet ar' ir' (getArrayElemSize aTy) ]
     convertInst' (SProcArraySet ar ir) = do
-        recordVar ir
         addInstructions $ do
             (ir', iTy) <- resolveRefWithTy ir
             (ar', aTy) <- resolveRefWithTy ar

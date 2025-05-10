@@ -56,11 +56,11 @@ main = do
   case program of
     Nothing -> return ()
     Just procImp -> do
-      putStrLn "Imp:"
-      putStrLn $ Imp.progToString procImp
+      -- putStrLn "Imp:"
+      -- putStrLn $ Imp.progToString procImp
       let procSafeProc = Imp.convert procImp
-      putStrLn "SafeProc:"
-      putStrLn $ SafeProc.progToString procSafeProc
+      -- putStrLn "SafeProc:"
+      -- putStrLn $ SafeProc.progToString procSafeProc
       let procProc = SafeProc.convert procSafeProc
       -- putStrLn "UncheckedProc:"
       -- putStrLn $ UncheckedProc.progToString procProc

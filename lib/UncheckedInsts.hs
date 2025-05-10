@@ -68,6 +68,12 @@ arrayTargetVar v s = arrayTargetVar' v s 0
 arrayTargetVar' :: Var -> Int -> Int -> Var
 arrayTargetVar' (Var i) s k = Var $ i + s + k
 
+arrayTmpVar' :: Var -> Int -> Int -> Var
+arrayTmpVar' (Var i) _ k = Var $ i + k
+
+arrayTmpIndexVar' :: Var -> Int -> Var
+arrayTmpIndexVar' (Var i) s = Var $ i + 2 * s
+
 arrayTargetIdxVar :: Var -> Int -> Var
 arrayTargetIdxVar (Var i) s = Var $ i + 2*s + 1
 

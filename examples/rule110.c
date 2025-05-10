@@ -4,8 +4,8 @@
 //     printf("%c", (char)c);
 // }
 
-void print_array(int a[100]) {
-    int SIZE = 100;
+void print_array(int a[50]) {
+    int SIZE = 50;
 
     int i = 0;
     while (SIZE - i) {
@@ -19,10 +19,30 @@ void print_array(int a[100]) {
     write('\n');
 }
 
+int rule110(int c0, int c1, int c2) {
+    if (c0) {
+        if (c1) {
+            if (c2) { return 0; } 
+            else { return 1; }
+        } else {
+            if (c2) { return 1; }
+            else { return 0; }
+        }
+    } else {
+        if (c1) {
+            if (c2) { return 1; }
+            else { return 1; }
+        } else {
+            if (c2) { return 1; }
+            else { return 0; }
+        }
+    }
+}
+
 int main() {
-    int SIZE = 100;
-    int cur[100];
-    int next[100];
+    int SIZE = 50;
+    int cur[50];
+    int next[50];
 
     int i = 0;
     while (SIZE - i) {
@@ -46,38 +66,9 @@ int main() {
     while (SIZE - iterations) {
         print_array(cur);
 
-        int i = 1;
+        i = 1;
         while (SIZE - 1 - i) {
-            if (cur[i - 1]) {
-                if (cur[i]) {
-                    if (cur[i + 1]) {
-                        next[i] = 0;
-                    } else {
-                        next[i] = 1;
-                    }
-                } else {
-                    if (cur[i + 1]) {
-                        next[i] = 1;
-                    } else {
-                        next[i] = 0;
-                    }
-                }
-            } else {
-                if (cur[i]) {
-                    if (cur[i + 1]) {
-                        next[i] = 1;
-                    } else {
-                        next[i] = 1;
-                    }
-                } else {
-                    if (cur[i + 1]) {
-                        next[i] = 1;
-                    } else {
-                        next[i] = 0;
-                    }
-                }
-            }
-
+            next[i] = rule110(cur[i - 1], cur[i], cur[i + 1]);
             i = i + 1;
         }
 

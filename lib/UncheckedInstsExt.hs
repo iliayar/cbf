@@ -130,11 +130,15 @@ convert = convertBlocks
     convert' (InsExtWrite r) = [InstWrite (convertRef r)]
     convert' (InsExtIntrinsic prog) = prog
     convert' (InsExtArrayCopy fr tr sz se) =
+      [ InstConst (UI.arrayTmpIndexVar' (convertRef fr) se) 0] ++
+      fmap (\k -> InstConst (UI.arrayTmpVar' (convertRef fr) se k) 0) [0..se-1] ++
       fmap (\k -> InstConst (UI.arrayTargetVar' (convertRef fr) se k) 0) [0..se-1] ++
       [ InstConst (UI.arrayTargetIdxVar (convertRef fr) se) sz,
         InstArrCopy (convertRef fr) (convertRef tr) se
       ]
     convert' (InsExtArrayGet ar ir s) =
+      [ InstConst (UI.arrayTmpIndexVar' (convertRef ar) s) 0] ++
+      fmap (\k -> InstConst (UI.arrayTmpVar' (convertRef ar) s k) 0) [0..s-1] ++
       fmap (\k -> InstConst (UI.arrayTargetVar' (convertRef ar) s k) 0) [0..s-1] ++
       [ InstConst (convertVar TmpA) 0,
         InstMoveAdd (convertRef ir) [convertVar TmpA, UI.arrayTargetIdxVar (convertRef ar) s],
@@ -142,6 +146,8 @@ convert = convertBlocks
         InstArrGet (convertRef ar) s
       ]
     convert' (InsExtArraySet ar ir s) =
+      [ InstConst (UI.arrayTmpIndexVar' (convertRef ar) s) 0] ++
+      fmap (\k -> InstConst (UI.arrayTmpVar' (convertRef ar) s k) 0) [0..s-1] ++
       [ InstConst (convertVar TmpA) 0,
         InstMoveAdd (convertRef ir) [convertVar TmpA, UI.arrayTargetIdxVar (convertRef ar) s],
         InstMoveAdd (convertVar TmpA) [convertRef ir],

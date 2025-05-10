@@ -133,7 +133,8 @@ structs =
   Program
     [("S", TyStruct [("a", TyInt), ("b", TyArray TyInt 5), ("c", TyInt)])]
     [ (Function "main" [] TyVoid)
-        [ StmtAssgn (RefVar $ Var "res") (ExprConst 42),
+        [ StmtAllocate (Var "res") TyInt,
+          StmtAssgn (RefVar $ Var "res") (ExprConst 42),
           StmtAllocate (Var "s") (TyAlias "S"),
           StmtAssgn (RefStructField (RefVar $ Var "s") "a") $ ExprConst 10,
           StmtAssgn (RefVar $ Var "res") (ExprRef $ RefStructField (RefVar $ Var "s") "a"),

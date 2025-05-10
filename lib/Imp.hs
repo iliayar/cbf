@@ -165,16 +165,9 @@ initFreeForTy ty = do
   unless (M.member ty cFreeVariables) $ ST.put $ st {cFreeVariables = M.insert ty S.empty cFreeVariables}
 
 maybeAddAlloc :: SP.Var -> Ty -> Converter ()
-maybeAddAlloc var ty@(TyArray _ _) = do
+maybeAddAlloc var ty = do
   ty' <- convertTy ty
   addInstructions [SProcAlloc var ty']
-maybeAddAlloc var ty@(TyStruct _) = do
-  ty' <- convertTy ty
-  addInstructions [SProcAlloc var ty']
-maybeAddAlloc var (TyAlias name) = do
-  ConverterState { cTypeAliases } <- ST.get
-  maybeAddAlloc var (cTypeAliases M.! name)
-maybeAddAlloc _ _ = return ()
 
 getTmpVarTy :: SP.Var -> Converter Ty
 getTmpVarTy var = do
@@ -455,7 +448,7 @@ convert (Program typeAliases functions) =
       forM_ args convertExpr'
       vars <- replicateM (length args) popTmpVar
       addInstructions
-        [SProcCall (convertFunc func) (reverse vars) []]
+        [SProcCall (convertFunc func) vars []]
 
     convertExpr :: Expr -> Converter SP.Ref
     convertExpr expr = do
@@ -497,7 +490,7 @@ convert (Program typeAliases functions) =
       ty <- getSingleRetTy func
       tmp <- acquireTmpVar ty
       addInstructions
-        [SProcCall (convertFunc func) (reverse vars) [tmp]]
+        [SProcCall (convertFunc func) vars [tmp]]
 
     convertVar :: Var -> SP.Var
     convertVar (Var v) = SP.Var v
