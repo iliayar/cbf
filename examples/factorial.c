@@ -1,3 +1,13 @@
+// Uncomment and cc factorial.c -o factorial && ./factorial
+// Keep commented and bfc -r -c factorial.c
+// #include <stdio.h>
+// void write(int c) {
+//     printf("%c", (char)c);
+// }
+// int read() {
+//     char ch; scanf("%c", &ch); return ch;
+// }
+
 // 0 - <, 1 - =, 2 - >
 int compare(int a, int b) {
     while (b) {

@@ -1,8 +1,11 @@
-// Uncomment and clang rule110.c -o rule110 && ./rule110
+// Uncomment and cc rule110.c -o rule110 && ./rule110
 // Keep commented and cbf -r -c rule110.c
 // #include <stdio.h>
 // void write(int c) {
 //     printf("%c", (char)c);
+// }
+// int read() {
+//     char ch; scanf("%c", &ch); return ch;
 // }
 
 void print_array(int a[50]) {
