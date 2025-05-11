@@ -351,14 +351,23 @@ program = do
     funcs' <- moveMainToTop funcs
     return $ Program typedefs funcs'
 
-parseProgram :: String -> String -> IO (Maybe Program)
-parseProgram filename s =
+runImpParser :: String -> String -> Either (ParseErrorBundle String Custom) Program
+runImpParser filename s = 
     let (res, _) = runState (runParserT program filename s) ImpState {
         stTypeDefs = M.empty,
         stFuncDeclsWithoutBody = M.empty,
         stFuncDecls = M.empty,
         stVariables = M.empty
-    } in
+    } in res
+
+parseProgramUnsafe :: String -> Program
+parseProgramUnsafe s = case runImpParser "" s of
+    Left err -> error $ "Failed to parse:\n" ++ errorBundlePretty err
+    Right res -> res
+
+parseProgram :: String -> String -> IO (Maybe Program)
+parseProgram filename s =
+    let res = runImpParser filename s in
     case res  of
         Left err -> do
             putStrLn $ errorBundlePretty err

@@ -41,11 +41,14 @@ test-suite tests
     build-depends: base ^>=4.18.2.1
                  , HUnit ^>=1.6
                  , cbf-lib
+                 , neat-interpolation
+                 , text
     other-modules: TestUncheckedInsts
                    TestUncheckedInstsExt
                    TestUncheckedProc
                    TestSafeProc
                    TestImp
+                   TestRule110
 
 executable cbf
     import: warnings

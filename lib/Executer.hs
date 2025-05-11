@@ -79,16 +79,20 @@ data ExecuterD = ExecuterD
   { markers :: [Addr],
     pc :: Addr,
     insts :: V.Vector Brainfuck,
-    line :: Line Int
+    line :: Line Int,
+    output :: String,
+    captureOutput :: Bool
   }
 
-initExecuter :: [Brainfuck] -> ExecuterD
-initExecuter insts =
+initExecuter :: Bool -> [Brainfuck] -> ExecuterD
+initExecuter captureOutput insts =
   ExecuterD
     { markers = [],
       line = def,
       pc = Addr 0,
-      insts = V.fromList insts
+      insts = V.fromList insts,
+      output = "",
+      captureOutput
     }
 
 type Executer' a = StateT ExecuterD IO a
@@ -148,6 +152,12 @@ interrupt msg = do
     ExecuterD { pc = Addr pc } <- get
     fail $ "Malformed program(" ++ msg ++ ") at " ++ show pc
 
+doOutput :: Int -> Executer ()
+doOutput chCode = Executer $ do
+  let ch = Data.Char.chr chCode
+  st@(ExecuterD { output, captureOutput }) <- get
+  if captureOutput then put $ st { output = output ++ [ch] }
+  else liftIO $ putChar ch
 
 debugState :: Executer ()
 debugState = Executer $ do
@@ -156,11 +166,19 @@ debugState = Executer $ do
     liftIO $ putStrLn $ "Markers " ++ show markers
 
 
+executeOutput :: [Brainfuck] -> IO String
+executeOutput insts = snd <$> execute' True insts
+
 execute :: [Brainfuck] -> IO [Int]
-execute insts = do
+execute insts = fst <$> execute' False insts
+
+execute' :: Bool -> [Brainfuck] -> IO ([Int], String)
+execute' captureOutput insts = do
   (_, executer) <- case executeTillTheEnd of
-    Executer stateT -> runStateT stateT (initExecuter insts)
-  return $ extract $ line executer
+    Executer stateT -> runStateT stateT (initExecuter captureOutput insts)
+  let mem = extract $ line executer
+      out = output executer
+  return (mem, out)
   where
     executeTillTheEnd :: Executer ()
     executeTillTheEnd = do
@@ -180,7 +198,7 @@ execute insts = do
       modifyLine (`setCurrent` chCode)
     executeInst BfWrite = do
       ch <- executerCurrent
-      liftIO $ putChar $ Data.Char.chr ch
+      doOutput ch
     executeInst BfMoveLeft = modifyLine moveLeft
     executeInst BfMoveRight = modifyLine moveRight
     executeInst BfInc = modifyLine $ \line ->
