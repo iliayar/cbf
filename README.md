@@ -23,4 +23,4 @@ This is a compiler from a subset of C to highly unoptimized Brainfuck. There are
   - `func(expr, ...)` -- calling functions
   - `expr + expr`, `expr - expr` -- wrapping on overvflow addition and subtraction
 
-All features are presented in example [implementation of Rule 110](./examples/rule110.c).
+All features are presented in example [implementation of Rule 110](./examples/rule110.c) ([Run compiled version](https://copy.sh/brainfuck/?file=https://raw.githubusercontent.com/iliayar/cbf/refs/heads/master/examples/rule110.bf)).
