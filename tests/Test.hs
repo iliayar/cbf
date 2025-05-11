@@ -9,6 +9,7 @@ import qualified TestUncheckedProc
 import qualified TestSafeProc
 import qualified TestImp
 import qualified TestRule110
+import qualified TestFactorial
 
 
 tests :: Test
@@ -19,6 +20,7 @@ tests = TestList
   , TestLabel "TestSafeProc" TestSafeProc.tests
   , TestLabel "TestImp" TestImp.tests
   , TestLabel "TestRule110" TestRule110.tests
+  , TestLabel "TestFactorial" TestFactorial.tests
   ]
 
 main :: IO ()

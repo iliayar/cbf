@@ -9,6 +9,9 @@ import Control.Monad.State (StateT, get, put, runStateT)
 import qualified Data.Char
 import Data.Default
 import qualified Data.Vector as V
+import Control.Monad (when)
+import Text.Printf (printf)
+import Data.List (intercalate)
 
 cellSize :: Int
 cellSize = 8
@@ -81,18 +84,20 @@ data ExecuterD = ExecuterD
     insts :: V.Vector Brainfuck,
     line :: Line Int,
     output :: String,
-    captureOutput :: Bool
+    input :: String,
+    mockIO :: Bool
   }
 
-initExecuter :: Bool -> [Brainfuck] -> ExecuterD
-initExecuter captureOutput insts =
+initExecuter :: Bool -> String -> [Brainfuck] -> ExecuterD
+initExecuter mockIO inp insts =
   ExecuterD
     { markers = [],
       line = def,
       pc = Addr 0,
       insts = V.fromList insts,
       output = "",
-      captureOutput
+      input = inp,
+      mockIO
     }
 
 type Executer' a = StateT ExecuterD IO a
@@ -155,27 +160,47 @@ interrupt msg = do
 doOutput :: Int -> Executer ()
 doOutput chCode = Executer $ do
   let ch = Data.Char.chr chCode
-  st@(ExecuterD { output, captureOutput }) <- get
-  if captureOutput then put $ st { output = output ++ [ch] }
+  st@(ExecuterD { output, mockIO }) <- get
+  if mockIO then put $ st { output = output ++ [ch] }
   else liftIO $ putChar ch
+
+doInput :: Executer Char
+doInput = Executer $ do
+   st@(ExecuterD { input, mockIO }) <- get
+   if mockIO then do
+     case input of
+        ch' : is -> do
+            put $ st { input = is }
+            return ch'
+        [] -> return '\0'
+   else liftIO getChar
+    
+
+showLine :: [Int] -> String
+showLine line =
+    let idx = intercalate "|" $ fmap (printf "% 3d") [0..length line - 1] in
+    let dat = intercalate "|" $ fmap (printf "%03d") line in
+    "Idx: " ++ idx ++ "\n" ++ 
+    "Mem: " ++ dat
 
 debugState :: Executer ()
 debugState = Executer $ do
-    (ExecuterD { pc = (Addr pc), insts, markers }) <- get
-    liftIO $ putStrLn $ "Executing instruction at " ++ show pc ++ ": " ++ show (insts V.! pc)
-    liftIO $ putStrLn $ "Markers " ++ show markers
+    (ExecuterD { pc = (Addr pc), insts, markers, line }) <- get
+    -- liftIO $ putStrLn $ "Executing instruction at " ++ show pc ++ ": " ++ show (insts V.! pc)
+    -- liftIO $ putStrLn $ "Markers " ++ show markers
+    liftIO $ putStrLn $ showLine (extract line)
 
 
-executeOutput :: [Brainfuck] -> IO String
-executeOutput insts = snd <$> execute' True insts
+executeMockIO :: String -> [Brainfuck] -> IO String
+executeMockIO inp insts = snd <$> execute' True inp insts
 
 execute :: [Brainfuck] -> IO [Int]
-execute insts = fst <$> execute' False insts
+execute insts = fst <$> execute' False "" insts
 
-execute' :: Bool -> [Brainfuck] -> IO ([Int], String)
-execute' captureOutput insts = do
+execute' :: Bool -> String -> [Brainfuck] -> IO ([Int], String)
+execute' mockIO inp insts = do
   (_, executer) <- case executeTillTheEnd of
-    Executer stateT -> runStateT stateT (initExecuter captureOutput insts)
+    Executer stateT -> runStateT stateT (initExecuter mockIO inp insts)
   let mem = extract $ line executer
       out = output executer
   return (mem, out)
@@ -186,19 +211,19 @@ execute' captureOutput insts = do
       case inst of
         Nothing -> return ()
         Just inst' -> do
-            -- debugState
             executeInst inst'
             incPC
             executeTillTheEnd
 
     executeInst :: Brainfuck -> Executer ()
     executeInst BfRead = do
-      ch <- liftIO getChar
+      ch <- doInput
       let chCode = Data.Char.ord ch
       modifyLine (`setCurrent` chCode)
     executeInst BfWrite = do
       ch <- executerCurrent
       doOutput ch
+      -- when (ch == 10) debugState
     executeInst BfMoveLeft = modifyLine moveLeft
     executeInst BfMoveRight = modifyLine moveRight
     executeInst BfInc = modifyLine $ \line ->

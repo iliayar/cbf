@@ -49,6 +49,7 @@ test-suite tests
                    TestSafeProc
                    TestImp
                    TestRule110
+                   TestFactorial
 
 executable cbf
     import: warnings

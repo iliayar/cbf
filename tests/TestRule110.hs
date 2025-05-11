@@ -3,7 +3,7 @@
 module TestRule110 where
 
 import qualified BasicExt
-import Executer (executeOutput)
+import Executer (executeMockIO)
 import qualified Imp
 import Imp.Parser (parseProgramUnsafe)
 import qualified SafeProc
@@ -16,7 +16,7 @@ import qualified Data.Text as T
 
 evaluate :: Imp.Program -> IO String
 evaluate program =
-  executeOutput $
+  executeMockIO "" $
     BasicExt.convert $
       UncheckedInsts.convert $
         UncheckedInstsExt.convert $

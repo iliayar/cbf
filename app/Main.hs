@@ -7,7 +7,7 @@ module Main where
 
 import Basic (Brainfuck, bfToString)
 import qualified BasicExt
-import Executer (execute)
+import Executer (execute, showLine)
 import Imp
 import Imp.Parser (parseProgram)
 import qualified SafeProc
@@ -22,7 +22,7 @@ evaluate :: [Brainfuck] -> IO ()
 evaluate prog = do
   mem <- execute prog
   putStrLn ""
-  putStrLn $ "Memory: " ++ show mem
+  putStrLn $ showLine mem
 
 re :: String -> Expr
 re s = ExprRef $ RefVar $ Var s

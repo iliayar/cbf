@@ -328,8 +328,8 @@ progToString prog = runWriter $ progToString' prog
     varToString RetVar = "%ret"
 
     refToString (RefVar v) = varToString v
-    refToString (RefArrayValue ref s) = "%" ++ refToString ref ++ "{" ++ show s ++ "}.target"
-    refToString (RefStructField ref o) = "%" ++ refToString ref ++ "{" ++ show o ++ "}"
+    refToString (RefArrayValue ref s) = refToString ref ++ "{" ++ show s ++ "}.target"
+    refToString (RefStructField ref o) = refToString ref ++ "{" ++ show o ++ "}"
 
     funcToString :: Func -> String
     funcToString (Func i) = "func " ++ show i

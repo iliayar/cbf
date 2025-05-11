@@ -128,14 +128,14 @@ funcDecl = do
     o <- getOffset
     funcName <- identifier <* ws
     args <- char '(' *> ws *> sepBy (varDecl <* ws) (char ',' >> ws) <* ws <* char ')' <* ws
+    modify $ \st -> st {
+        stFuncDeclsWithoutBody =
+            M.insert funcName (Function funcName args retTy []) $ stFuncDeclsWithoutBody st
+        }
     brace <- optional $ char '{' <* ws
     case brace of
         Nothing -> do
             void $ char ';'
-            modify $ \st -> st {
-                stFuncDeclsWithoutBody =
-                    M.insert funcName (Function funcName args retTy []) $ stFuncDeclsWithoutBody st
-                }
             return Nothing
         Just _ -> do
             -- FIXME: Check that arguments has different names

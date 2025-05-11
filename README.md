@@ -11,7 +11,8 @@ This is a compiler from a subset of C to highly unoptimized Brainfuck. There are
   - `T func(T arg, ...);` -- declaration
   - `T func(T arg, ...) { .. }` -- definition
 - Statements:
-  - `T x = e` -- local variables declarations
+  - `T x = expr` -- local variables declarations
+  - `x = expr` -- assignments
   - `if (expr) { .. } else { .. }` -- conditionals
   - `while (expr) { .. }` -- loop construcions
   - `func(expr, ...)` -- function calls
@@ -20,6 +21,6 @@ This is a compiler from a subset of C to highly unoptimized Brainfuck. There are
   - `expr.field` -- accessing structures' fields
   - `x[expr]` -- indexing arrays with custom expressions
   - `func(expr, ...)` -- calling functions
-  - `expr + expr`, `expr - expr` -- addition and subtraction
+  - `expr + expr`, `expr - expr` -- wrapping on overvflow addition and subtraction
 
 All features are presented in example [implementation of Rule 110](./examples/rule110.c).

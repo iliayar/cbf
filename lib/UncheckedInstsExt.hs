@@ -109,6 +109,7 @@ convert = convertBlocks
     convert' :: UncheckedInstExt -> [UncheckedInst]
     convert' (InsExtGoto l) =
       [ InstConst (convertVar TmpA) (transLbl l),
+        InstConst (convertVar Pc) 0,
         InstMoveAdd (convertVar TmpA) [convertVar Pc]
       ]
     convert' (InsExtConst var n) = [InstConst (convertRef var) n]
@@ -286,5 +287,5 @@ progToString prog = runWriter $ progToString' prog
     varToString TmpB = "%tmpb"
 
     refToString (RefVar v) = varToString v
-    refToString (RefArrayValue ref s) = "%" ++ refToString ref ++ "{" ++ show s ++ "}.target"
-    refToString (RefStructField ref o) = "%" ++ refToString ref ++ "{" ++ show o ++ "}"
+    refToString (RefArrayValue ref s) = refToString ref ++ "{" ++ show s ++ "}.target"
+    refToString (RefStructField ref o) = refToString ref ++ "{" ++ show o ++ "}"
