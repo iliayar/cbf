@@ -1,11 +1,11 @@
 {-# LANGUAGE QuasiQuotes #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-{-# HLINT ignore "Redundant bracket" #-}
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
+{-# OPTIONS_GHC -Wno-unused-matches #-}
 
 module Main where
 
-import Basic (Brainfuck, bfFromString, bfToString, doubleCellSize)
+import Basic (Brainfuck, bfToString)
 import qualified BasicExt
 import Executer (execute)
 import Imp
@@ -20,7 +20,6 @@ import qualified Data.Text as T
 
 evaluate :: [Brainfuck] -> IO ()
 evaluate prog = do
-  putStrLn $ "Evaluating: " ++ bfToString prog
   mem <- execute prog
   putStrLn ""
   putStrLn $ "Memory: " ++ show mem
@@ -49,10 +48,23 @@ example = T.unpack
 main :: IO ()
 main = do
   args <- getArgs
-  program <- case args of
-    [] -> parseProgram "<example>" example
-    "-c" : filename : _ -> readFile filename >>= parseProgram filename
-    _ -> return Nothing
+  case args of
+    "--help" : _ -> do
+        putStrLn "Usafe: cbf [--help] [[-r] -c <FILE>]"
+    _ -> return ()
+  (args, doEval) <- case args of
+    "-r" : as -> return (as, True)
+    [] -> return ([], True)
+    as -> return (as, False)
+  (args, program) <- case args of
+    [] -> do
+      prog <- parseProgram "<example>" example
+      return (["-r"], prog)
+    "-c" : filename : as -> do
+        content <- readFile filename
+        prog <- parseProgram filename content
+        return (as, prog)
+    as -> return (as, Nothing)
   case program of
     Nothing -> return ()
     Just procImp -> do
@@ -74,5 +86,5 @@ main = do
       -- putStrLn "BasicExt:"
       -- putStrLn $ BasicExt.progToString procBfExt
       let procBf = BasicExt.convert procBfExt
-      -- evaluate $ doubleCellSize procBf
-      evaluate procBf
+      if doEval then evaluate procBf
+      else putStrLn $ bfToString procBf

@@ -1,11 +1,12 @@
 // Uncomment and clang rule110.c -o rule110 && ./rule110
+// Keep commented and cbf -r -c rule110.c
 // #include <stdio.h>
 // void write(int c) {
 //     printf("%c", (char)c);
 // }
 
-void print_array(int a[100]) {
-    int SIZE = 100;
+void print_array(int a[50]) {
+    int SIZE = 50;
 
     int i = 0;
     while (SIZE - i) {
@@ -42,9 +43,9 @@ int rule110(int c0, int c1, int c2) {
 }
 
 int main() {
-    int SIZE = 100;
-    int cur[100];
-    int next[100];
+    int SIZE = 50;
+    int cur[50];
+    int next[50];
 
     int i = 0;
     while (SIZE - i) {

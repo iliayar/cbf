@@ -1,5 +1,5 @@
 cabal-version: 3.0
-name: bfc
+name: cbf
 version: 0.1.0.0
 license: BSD-3-Clause
 license-file: LICENSE
@@ -12,7 +12,7 @@ common warnings
     ghc-options: -Wall
 
 
-library bfc-lib
+library cbf-lib
     import: warnings
     hs-source-dirs: lib
     build-depends: base ^>=4.18.2.1
@@ -40,19 +40,19 @@ test-suite tests
     hs-source-dirs: tests
     build-depends: base ^>=4.18.2.1
                  , HUnit ^>=1.6
-                 , bfc-lib
+                 , cbf-lib
     other-modules: TestUncheckedInsts
                    TestUncheckedInstsExt
                    TestUncheckedProc
                    TestSafeProc
                    TestImp
 
-executable bfc
+executable cbf
     import: warnings
     main-is: Main.hs
     other-modules:
     build-depends: base ^>=4.18.2.1
-                 , bfc-lib
+                 , cbf-lib
                  , neat-interpolation
                  , text
 
